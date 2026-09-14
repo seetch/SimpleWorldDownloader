@@ -32,6 +32,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.multiplayer.ClientAdvancements;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.client.gui.screens.inventory.MerchantScreen;
 import net.minecraft.nbt.*;
 import net.minecraft.ChatFormatting;
@@ -57,6 +58,8 @@ import net.minecraft.world.entity.npc.villager.VillagerData;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -85,9 +88,13 @@ public class SaveManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     private static final Queue<ChunkSaveTask> saveQueue = new ConcurrentLinkedQueue<>();
+    private static final Queue<ChunkCaptureTask> captureQueue = new ConcurrentLinkedQueue<>();
+    private static final java.util.Set<String> scheduledCaptures = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final java.util.Set<String> queuedChunks = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final java.util.Set<String> touchedChunks = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final int MAX_QUEUE_SIZE = 4096;
+    private static final int MAX_CAPTURE_QUEUE_SIZE = 4096;
+    private static final int CHUNK_CAPTURES_PER_TICK = 2;
     public static Thread saveThread = null;
 
     public static volatile boolean isSaving = false;
@@ -120,9 +127,34 @@ public class SaveManager {
         else start();
     }
 
+    public static void tick() {
+        if (!isSaving) return;
+
+        for (int i = 0; i < CHUNK_CAPTURES_PER_TICK; i++) {
+            ChunkCaptureTask task = captureQueue.poll();
+            if (task == null) return;
+
+            String captureKey = packChunkDimKey(task.chunkX, task.chunkZ, task.dimension);
+            if (!scheduledCaptures.remove(captureKey)) continue;
+
+            ClientLevel world = mc.level;
+            if (world == null || !world.dimension().equals(task.dimension)) continue;
+
+            LevelChunk chunk = world.getChunkSource().getChunkNow(task.chunkX, task.chunkZ);
+            if (chunk == null || chunk.isEmpty()) continue;
+
+            if (!isResumingExistingWorld || task.touchOnResume) {
+                touchChunk(chunk.getPos(), task.dimension);
+            }
+            captureChunkToRegion(task.worldFolder, chunk, task.showMessage, task.dimension);
+        }
+    }
+
     public static void start() {
         if (isSaving || mc.player == null) return;
 
+        captureQueue.clear();
+        scheduledCaptures.clear();
         ChunkDownloadTracker.reset();
         ops = Objects.requireNonNull(mc.level).registryAccess().createSerializationContext(NbtOps.INSTANCE);
         isSaving = true;
@@ -174,6 +206,8 @@ public class SaveManager {
 
         queuedChunks.clear();
         touchedChunks.clear();
+        captureQueue.clear();
+        scheduledCaptures.clear();
         ChunkDownloadTracker.clearQueued();
 
         if (cacheBlockInventories != null) cacheBlockInventories.clear();
@@ -934,7 +968,7 @@ public class SaveManager {
         isResumingExistingWorld = false;
         boolean allowResume = SwdClient.CONFIG.resumeDownloads;
         if (SwdClient.CONFIG.saveWorldTo.isEmpty()) {
-            if (mc.getCurrentServer() != null) name = mc.getCurrentServer().ip.replaceAll("[\\\\/:*?\"<>|]", "_");
+            if (mc.getCurrentServer() != null) name = getServerAddress().replaceAll("[\\\\/:*?\"<>|]", "_");
             else {
                 if (mc.getSingleplayerServer() == null) name = "Replay Mod";
                 else if (mc.getSingleplayerServer().getWorldData().getLevelName().equalsIgnoreCase("Replay"))
@@ -1192,19 +1226,41 @@ public class SaveManager {
             for (int dz = -radius; dz <= radius; dz++) {
                 int chunkX = playerChunkX + dx;
                 int chunkZ = playerChunkZ + dz;
-
-                LevelChunk chunk = world.getChunkSource().getChunkNow(chunkX, chunkZ);
-                if (chunk != null && !chunk.isEmpty()) {
-                    if (!isResumingExistingWorld || touchOnResume) {
-                        touchChunk(chunk.getPos(), world.dimension());
-                    }
-                    saveChunkToRegion(path, chunk, false, world.dimension());
-                }
+                scheduleChunkCapture(path, chunkX, chunkZ, world.dimension(), touchOnResume, false);
             }
         }
     }
 
+    private static String getServerAddress() {
+        String configuredAddress = mc.getCurrentServer().ip;
+        ServerAddress parsedAddress = ServerAddress.parseString(configuredAddress);
+        if (mc.getConnection() == null) return configuredAddress;
+
+        SocketAddress remoteAddress = mc.getConnection().getConnection().getRemoteAddress();
+        if (remoteAddress instanceof InetSocketAddress inetAddress
+                && inetAddress.getPort() != parsedAddress.getPort()) {
+            return parsedAddress.getHost() + ":" + inetAddress.getPort();
+        }
+        return configuredAddress;
+    }
+
+    private static void scheduleChunkCapture(Path worldFolder, int chunkX, int chunkZ,
+                                             net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+                                             boolean touchOnResume, boolean showMessage) {
+        if (scheduledCaptures.size() >= MAX_CAPTURE_QUEUE_SIZE) return;
+
+        String captureKey = packChunkDimKey(chunkX, chunkZ, dimension);
+        if (scheduledCaptures.add(captureKey)) {
+            captureQueue.add(new ChunkCaptureTask(worldFolder, chunkX, chunkZ, dimension, touchOnResume, showMessage));
+        }
+    }
+
     public static void saveChunkToRegion(Path worldFolder, LevelChunk wc, boolean showMessage, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+        if (wc.isEmpty()) return;
+        scheduleChunkCapture(worldFolder, wc.getPos().x(), wc.getPos().z(), dimension, false, showMessage);
+    }
+
+    private static void captureChunkToRegion(Path worldFolder, LevelChunk wc, boolean showMessage, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
         if (wc.isEmpty()) return;
 
         String dedupKey = packChunkDimKey(wc.getPos(), dimension);
@@ -1351,6 +1407,8 @@ public class SaveManager {
     }
 
     private static void createPlayerDataFile() {
+        if (mc.player == null || name == null) return;
+
         try (LevelStorageSource.LevelStorageAccess access =
                      LevelStorageSource.createDefault(mc.getLevelSource().getBaseDir()).createAccess(name)) {
             PlayerDataStorage playerStorage = access.createPlayerStorage();
@@ -1710,8 +1768,13 @@ public class SaveManager {
      * This avoids any cross-dimension collision when chunk coordinates match.
      */
     private static String packChunkDimKey(ChunkPos pos, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dim) {
+        return packChunkDimKey(pos.x(), pos.z(), dim);
+    }
+
+    private static String packChunkDimKey(int chunkX, int chunkZ,
+                                          net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dim) {
         String dimId = dim != null ? dim.identifier().toString() : "minecraft:overworld";
-        return dimId + "|" + pos.x() + "," + pos.z();
+        return dimId + "|" + chunkX + "," + chunkZ;
     }
 
     /**
@@ -1725,6 +1788,11 @@ public class SaveManager {
 
     private record ChunkSaveTask(ChunkPos pos, CompoundTag blockNbt, CompoundTag entityNbt,
                                  net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+    }
+
+    private record ChunkCaptureTask(Path worldFolder, int chunkX, int chunkZ,
+                                    net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+                                    boolean touchOnResume, boolean showMessage) {
     }
 
     private static boolean isEmptyChunkNbt(CompoundTag nbt) {

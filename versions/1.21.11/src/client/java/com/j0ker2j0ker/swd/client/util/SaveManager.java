@@ -19,7 +19,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.world.entity.player.Abilities;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biomes;
@@ -33,6 +32,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.multiplayer.ClientAdvancements;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.client.gui.screens.inventory.MerchantScreen;
 import net.minecraft.nbt.*;
 import net.minecraft.network.chat.Component;
@@ -46,8 +46,9 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.PalettedContainer;
 import net.minecraft.world.level.chunk.Strategy;
+import net.minecraft.world.level.storage.LevelStorageSource;
+import net.minecraft.world.level.storage.PlayerDataStorage;
 import net.minecraft.world.level.storage.TagValueOutput;
-import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.inventory.MerchantMenu;
 import net.minecraft.world.item.trading.MerchantOffers;
 import net.minecraft.world.entity.npc.villager.AbstractVillager;
@@ -56,6 +57,8 @@ import net.minecraft.world.entity.npc.villager.VillagerData;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -83,20 +86,16 @@ public class SaveManager {
             .withZone(ZoneId.systemDefault());
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    private static final String OVERWORLD = "overworld";
-    private static final String NETHER = "the_nether";
-    private static final String END = "the_end";
-
-
     private static final Queue<ChunkSaveTask> saveQueue = new ConcurrentLinkedQueue<>();
+    private static final Queue<ChunkCaptureTask> captureQueue = new ConcurrentLinkedQueue<>();
+    private static final Set<String> scheduledCaptures = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final int MAX_CAPTURE_QUEUE_SIZE = 4096;
+    private static final int CHUNK_CAPTURES_PER_TICK = 2;
     public static Thread saveThread = null;
 
     public static volatile boolean isSaving = false;
     public static String name;
     public static Path path;
-
-    private static CompoundTag cacheRootTag;
-    private static Path cachePlayerDatPath;
 
     private static HashMap<BlockPos, List<ItemStack>> cacheBlockInventories;
     private static HashMap<UUID, List<ItemStack>> cacheEntityInventories;
@@ -120,9 +119,31 @@ public class SaveManager {
         else start();
     }
 
+    public static void tick() {
+        if (!isSaving) return;
+
+        for (int i = 0; i < CHUNK_CAPTURES_PER_TICK; i++) {
+            ChunkCaptureTask task = captureQueue.poll();
+            if (task == null) return;
+
+            String captureKey = packChunkDimKey(task.chunkX, task.chunkZ, task.dimension);
+            if (!scheduledCaptures.remove(captureKey)) continue;
+
+            ClientLevel world = mc.level;
+            if (world == null || !world.dimension().equals(task.dimension)) continue;
+
+            LevelChunk chunk = world.getChunkSource().getChunkNow(task.chunkX, task.chunkZ);
+            if (chunk != null) {
+                captureChunkToRegion(task.worldFolder, chunk, task.showMessage, task.dimension);
+            }
+        }
+    }
+
     public static void start() {
         if(isSaving || mc.player == null) return;
 
+        captureQueue.clear();
+        scheduledCaptures.clear();
         ChunkDownloadTracker.reset();
         ops = Objects.requireNonNull(mc.level).registryAccess().createSerializationContext(NbtOps.INSTANCE);
         isSaving = true;
@@ -132,7 +153,9 @@ public class SaveManager {
         ChunkDownloadTracker.loadExisting(path);
 
         setupWorldFolder();
-        createPlayerDataCache(path);
+        if (SwdClient.CONFIG.includePlayerData) {
+            createPlayerDataFile();
+        }
 
         cacheBlockInventories = new HashMap<>();
         cacheEntityInventories = new HashMap<>();
@@ -157,8 +180,12 @@ public class SaveManager {
         flushPlayerMetaFiles(true);
         isSaving = false;
 
-        createPlayerDataFile();
+        if (SwdClient.CONFIG.includePlayerData) {
+            createPlayerDataFile();
+        }
         printStatus("§c> Stopped saving chunks.");
+        captureQueue.clear();
+        scheduledCaptures.clear();
         ChunkDownloadTracker.clearQueued();
 
         if (cacheBlockInventories != null) cacheBlockInventories.clear();
@@ -295,8 +322,15 @@ public class SaveManager {
         String title = screen.getTitle().getString();
 
         if (screen instanceof AbstractContainerScreen<?> container && title.equals(Component.translatable("container.enderchest").getString())) {
+            if (mc.player == null) return;
+
+            int slotIndex = 0;
+            for (ItemStack stack : container.getMenu().getItems()) {
+                if (slotIndex >= 27) break;
+                mc.player.getEnderChestInventory().setItem(slotIndex++, stack);
+            }
+
             printStatus("§a> Enderchest content saved.");
-            cacheEnderItems(container.getMenu().getItems());
             return;
         }
 
@@ -648,7 +682,7 @@ public class SaveManager {
 
     private static void determineWorldName() {
         if(SwdClient.CONFIG.saveWorldTo.isEmpty()) {
-            if(mc.getCurrentServer() != null) name = mc.getCurrentServer().ip.replaceAll("[\\\\/:*?\"<>|]", "_");
+            if(mc.getCurrentServer() != null) name = getServerAddress().replaceAll("[\\\\/:*?\"<>|]", "_");
             else {
                 if(mc.getSingleplayerServer() == null) name = "Replay Mod";
                 else if(mc.getSingleplayerServer().getWorldData().getLevelName().equalsIgnoreCase("Replay")) name = "Flashback";
@@ -665,171 +699,17 @@ public class SaveManager {
         }
     }
 
-    private static void createPlayerDataCache(Path path) {
-        Path playerdataPath;
-        try {
-            playerdataPath = Files.createDirectories(path.resolve("playerdata"));
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+    private static String getServerAddress() {
+        String configuredAddress = mc.getCurrentServer().ip;
+        ServerAddress parsedAddress = ServerAddress.parseString(configuredAddress);
+        if (mc.getConnection() == null) return configuredAddress;
+
+        SocketAddress remoteAddress = mc.getConnection().getConnection().getRemoteAddress();
+        if (remoteAddress instanceof InetSocketAddress inetAddress
+                && inetAddress.getPort() != parsedAddress.getPort()) {
+            return parsedAddress.getHost() + ":" + inetAddress.getPort();
         }
-
-        if(mc.level == null || mc.player == null) return;
-
-        CompoundTag root = new CompoundTag();
-
-        CompoundTag brain = new CompoundTag();
-        brain.put("memories", new ListTag());
-        root.put("Brain", brain);
-
-        root.putInt("HurtByTimestamp", 0);
-        root.putShort("SleepTimer", (short) mc.player.getSleepTimer());
-        if(mc.player.isInvulnerable()) root.putByte("Invulnerable", (byte) 1);
-        else root.putByte("Invulnerable", (byte) 0);
-        if(mc.player.isFallFlying()) root.putByte("FallFlying", (byte) 1);
-        else root.putByte("FallFlying", (byte) 0);
-        root.putInt("PortalCooldown", mc.player.getPortalCooldown());
-        root.putFloat("AbsorptionAmount", mc.player.getAbsorptionAmount());
-
-        CompoundTag abilities = new CompoundTag();
-        Abilities ab = mc.player.getAbilities();
-        if(ab.invulnerable) abilities.putByte("invulnerable", (byte) 1);
-        else  abilities.putByte("invulnerable", (byte) 0);
-        if(ab.mayfly) abilities.putByte("mayfly", (byte) 1);
-        else abilities.putByte("mayfly", (byte) 0);
-        if(ab.instabuild) abilities.putByte("instabuild", (byte) 1);
-        else abilities.putByte("instabuild", (byte) 0);
-        abilities.putFloat("walkSpeed", ab.getWalkingSpeed());
-        if (ab.mayBuild) abilities.putByte("mayBuild", (byte) 1);
-        else abilities.putByte("mayBuild", (byte) 0);
-        if(ab.flying) abilities.putByte("flying", (byte) 1);
-        else abilities.putByte("flying", (byte) 0);
-        abilities.putFloat("flySpeed", ab.getFlyingSpeed());
-        root.put("abilities", abilities);
-
-        CompoundTag recipeBook = new CompoundTag();
-        recipeBook.put("recipes", new ListTag());
-        recipeBook.put("toBeDisplayed", new ListTag());
-        root.put("recipeBook", recipeBook);
-
-        root.putShort("DeathTime", (short) mc.player.deathTime);
-        root.putInt("XpSeed", 0);
-        root.putInt("XpTotal", mc.player.totalExperience);
-        root.putIntArray("UUID",  new int[]{0, 0, 0, 0});
-        if(mc.player.gameMode() == null) root.putInt("playerGameType", 1);
-        else root.putInt("playerGameType", Objects.requireNonNull(mc.player.gameMode()).getId());
-        root.putByte("seenCredits", (byte) 0);
-
-        ListTag motion = new ListTag();
-        Vec3 currentMotion = mc.player.getDeltaMovement();
-        motion.add(DoubleTag.valueOf(currentMotion.x));
-        motion.add(DoubleTag.valueOf(currentMotion.y));
-        motion.add(DoubleTag.valueOf(currentMotion.z));
-        root.put("Motion", motion);
-
-        root.putFloat("Health", mc.player.getHealth());
-        root.putFloat("foodSaturationLevel", mc.player.getFoodData().getSaturationLevel());
-
-        CompoundTag equipment = new CompoundTag();
-        saveItem(mc.player.getInventory().getItem(39), ops).ifPresent(t -> equipment.put("head", t));
-        saveItem(mc.player.getInventory().getItem(38), ops).ifPresent(t -> equipment.put("chest", t));
-        saveItem(mc.player.getInventory().getItem(37), ops).ifPresent(t -> equipment.put("legs", t));
-        saveItem(mc.player.getInventory().getItem(36), ops).ifPresent(t -> equipment.put("feet", t));
-        saveItem(mc.player.getOffhandItem(), ops).ifPresent(t -> equipment.put("offhand", t));
-
-        root.put("equipment", equipment);
-
-        root.putDouble("fall_distance", mc.player.fallDistance);
-        root.putShort("Air", (short) mc.player.getAirSupply());
-        if(mc.player.onGround()) root.putByte("ground", (byte) 1);
-        else root.putByte("ground", (byte) 0);
-        root.putString("Dimension", mc.level.dimension().identifier().toString());
-
-        ListTag rotation = new ListTag();
-        rotation.add(FloatTag.valueOf(mc.player.getYRot()));
-        rotation.add(FloatTag.valueOf(mc.player.getXRot()));
-        root.put("Rotation", rotation);
-
-        root.putInt("XpLevel", mc.player.experienceLevel);
-        root.putInt("current_impulse_context_reset_grace_time", 0);
-
-        CompoundTag warden_spawn_tracker = new CompoundTag();
-        warden_spawn_tracker.putInt("warning_level", 0);
-        warden_spawn_tracker.putInt("ticks_since_last_warning", 380);
-        warden_spawn_tracker.putInt("cooldown_ticks", 0);
-        root.put("warden_spawn_tracker", warden_spawn_tracker);
-
-        root.putInt("Score", mc.player.getScore());
-
-        ListTag pos =  new ListTag();
-        pos.add(DoubleTag.valueOf(mc.player.getX()));
-        pos.add(DoubleTag.valueOf(mc.player.getY()));
-        pos.add(DoubleTag.valueOf(mc.player.getZ()));
-        root.put("Pos", pos);
-
-        root.putShort("Fire", (short) mc.player.getRemainingFireTicks());
-        root.putFloat("XpP", mc.player.experienceProgress);
-
-        ListTag attributes = new ListTag();
-
-        CompoundTag attributes0 = new CompoundTag();
-        attributes0.putString("id", "minecraft:waypoint_transmit_range");
-        attributes0.putDouble("base", 60000000);
-
-        CompoundTag attributes1 = new CompoundTag();
-        attributes1.putString("id", "minecraft:block_interaction_range");
-        attributes1.putDouble("base", 4.5);
-
-        CompoundTag attributes2 = new CompoundTag();
-        attributes2.putString("id", "minecraft:entity_interaction_range");
-        attributes2.putDouble("base", 3);
-
-        CompoundTag attributes3 = new CompoundTag();
-        attributes3.putString("id", "minecraft:movement_speed");
-        attributes3.putDouble("base", 0.10000000149011612);
-
-        attributes.add(attributes0);
-        attributes.add(attributes1);
-        attributes.add(attributes2);
-        attributes.add(attributes3);
-        root.put("attributes", attributes);
-
-        root.putInt("DataVersion", DATA_VERSION);
-        root.putInt("foodLevel", mc.player.getFoodData().getFoodLevel());
-        root.putFloat("foodExhaustionLevel", 0f);
-        root.putByte("spawn_extra_particles_on_fall", (byte) 0);
-        root.putShort("HurtTime", (short) mc.player.hurtTime);
-        root.putInt("SelectedItemSlot", mc.player.getInventory().getSelectedSlot());
-
-        ListTag inventory = new ListTag();
-        for (int slot = 0; slot < mc.player.getInventory().getContainerSize(); slot++) {
-            ItemStack stack = mc.player.getInventory().getItem(slot);
-            int finalSlot = slot;
-            saveItem(stack, ops).ifPresent(compound -> {
-                compound.putByte("Slot", (byte) finalSlot);
-                inventory.add(compound);
-            });
-        }
-        root.put("Inventory", inventory);
-
-        root.putInt("foodTickTimer", 0);
-
-        cachePlayerDatPath  = playerdataPath.resolve(mc.player.getStringUUID() + ".dat");
-        cacheRootTag = root;
-    }
-
-    public static void cacheEnderItems(List<ItemStack> items) {
-        ListTag enderItems = new ListTag();
-        int i = 0;
-        for (ItemStack stack  : items) {
-            if(i>26) break;
-            int finalI = i;
-            saveItem(stack, ops).ifPresent(compound -> {
-                compound.putByte("Slot", (byte) finalI);
-                enderItems.add(compound);
-            });
-            i++;
-        }
-        cacheRootTag.put("EnderItems", enderItems);
+        return configuredAddress;
     }
 
     private static Optional<CompoundTag> saveItem(ItemStack stack, DynamicOps<Tag> ops) {
@@ -875,6 +755,7 @@ public class SaveManager {
     }
 
     private static void writeStatsFile(Path statsFile) throws IOException {
+        if (!SwdClient.CONFIG.includePlayerData) return;
         JsonObject existingRoot = readJsonObject(statsFile);
         JsonObject mergedStats = new JsonObject();
 
@@ -908,6 +789,7 @@ public class SaveManager {
     }
 
     private static void writeAdvancementsFile(Path advancementsFile) throws IOException {
+        if (!SwdClient.CONFIG.includePlayerData) return;
         JsonObject existingRoot = readJsonObject(advancementsFile);
         JsonObject mergedRoot = new JsonObject();
 
@@ -1046,15 +928,27 @@ public class SaveManager {
                 int chunkX = playerChunkX + dx;
                 int chunkZ = playerChunkZ + dz;
 
-                LevelChunk chunk = world.getChunkSource().getChunkNow(chunkX, chunkZ);
-                if (chunk != null) {
-                    saveChunkToRegion(path, chunk, false, world.dimension());
-                }
+                scheduleChunkCapture(path, chunkX, chunkZ, world.dimension(), false);
             }
         }
     }
 
+    private static void scheduleChunkCapture(Path worldFolder, int chunkX, int chunkZ,
+                                             net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+                                             boolean showMessage) {
+        if (scheduledCaptures.size() >= MAX_CAPTURE_QUEUE_SIZE) return;
+
+        String captureKey = packChunkDimKey(chunkX, chunkZ, dimension);
+        if (scheduledCaptures.add(captureKey)) {
+            captureQueue.add(new ChunkCaptureTask(worldFolder, chunkX, chunkZ, dimension, showMessage));
+        }
+    }
+
     public static void saveChunkToRegion(Path worldFolder, LevelChunk wc, boolean showMessage, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+        scheduleChunkCapture(worldFolder, wc.getPos().x, wc.getPos().z, dimension, showMessage);
+    }
+
+    private static void captureChunkToRegion(Path worldFolder, LevelChunk wc, boolean showMessage, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
         CompoundTag blockNbt = buildChunkNbt(wc);
         CompoundTag entityNbt = buildEntityChunkNbt(wc);
 
@@ -1103,8 +997,12 @@ public class SaveManager {
     }
 
     private static void createPlayerDataFile() {
-        try {
-            NbtIo.writeCompressed(cacheRootTag, cachePlayerDatPath);
+        if (mc.player == null || name == null) return;
+
+        try (LevelStorageSource.LevelStorageAccess access =
+                     LevelStorageSource.createDefault(mc.getLevelSource().getBaseDir()).createAccess(name)) {
+            PlayerDataStorage playerStorage = access.createPlayerStorage();
+            playerStorage.save(mc.player);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -1484,6 +1382,16 @@ public class SaveManager {
         return worldFolder;
     }
 
+    private static String packChunkDimKey(int chunkX, int chunkZ,
+                                          net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+        String dimensionId = dimension != null ? dimension.identifier().toString() : "minecraft:overworld";
+        return dimensionId + "|" + chunkX + "," + chunkZ;
+    }
+
     private record ChunkSaveTask(ChunkPos pos, CompoundTag blockNbt, CompoundTag entityNbt) { }
+
+    private record ChunkCaptureTask(Path worldFolder, int chunkX, int chunkZ,
+                                    net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+                                    boolean showMessage) { }
 
 }

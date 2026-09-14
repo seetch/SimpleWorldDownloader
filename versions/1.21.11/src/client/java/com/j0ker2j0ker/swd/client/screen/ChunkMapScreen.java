@@ -23,6 +23,8 @@ public class ChunkMapScreen extends Screen {
     private static final int GRID_COLOR = 0xFF252C34;
     private static final int PANEL_COLOR = 0xE611151A;
     private static final int PLAYER_COLOR = 0xFFFFFFFF;
+    private static final int MAX_VISIBLE_CHUNKS = 6000;
+    private static final int SNAPSHOT_INTERVAL_TICKS = 10;
 
     private final Screen parent;
     private int centerChunkX;
@@ -32,10 +34,21 @@ public class ChunkMapScreen extends Screen {
     private int mapTop;
     private int mapRight;
     private int mapBottom;
+    private int gridLeft;
+    private int gridTop;
+    private int snapshotColumns;
+    private int snapshotRows;
+    private int snapshotStartChunkX;
+    private int snapshotStartChunkZ;
+    private int snapshotTicks;
+    private ChunkState[] snapshot = new ChunkState[0];
+    private Component summary = Component.empty();
+    private boolean snapshotDirty = true;
     private boolean centerInitialized;
     private boolean draggingMap;
     private double dragAccumulatorX;
     private double dragAccumulatorY;
+    private Button downloadButton;
 
     public ChunkMapScreen(Screen parent) {
         super(Component.translatable("swd.screen.chunk_map.title"));
@@ -50,10 +63,28 @@ public class ChunkMapScreen extends Screen {
             centerInitialized = true;
         }
 
+        int buttonWidth = Math.min(110, Math.max(70, (this.width - 50) / 3));
+        int totalWidth = buttonWidth * 3 + 10;
+        int buttonX = (this.width - totalWidth) / 2;
+        this.downloadButton = this.addRenderableWidget(Button.builder(Component.empty(), button -> toggleDownload())
+                .pos(buttonX, this.height - 27).width(buttonWidth).build());
         this.addRenderableWidget(Button.builder(Component.translatable("swd.button.center_player"), button -> centerOnPlayer())
-                .pos(this.width / 2 - 105, this.height - 27).width(100).build());
+                .pos(buttonX + buttonWidth + 5, this.height - 27).width(buttonWidth).build());
         this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
-                .pos(this.width / 2 + 5, this.height - 27).width(100).build());
+                .pos(buttonX + (buttonWidth + 5) * 2, this.height - 27).width(buttonWidth).build());
+
+        updateDownloadButton();
+        refreshSnapshot();
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        updateDownloadButton();
+        snapshotTicks++;
+        if ((snapshotDirty && snapshotTicks >= 2) || snapshotTicks >= SNAPSHOT_INTERVAL_TICKS) {
+            refreshSnapshot();
+        }
     }
 
     @Override
@@ -81,65 +112,68 @@ public class ChunkMapScreen extends Screen {
         graphics.fill(mapLeft - 2, mapTop - 2, mapRight + 2, mapBottom + 2, PANEL_COLOR);
         graphics.renderOutline(mapLeft - 2, mapTop - 2, mapRight - mapLeft + 4, mapBottom - mapTop + 4, 0xFF59636E);
 
-        int columns = Math.max(1, (mapRight - mapLeft) / cellSize);
-        int rows = Math.max(1, (mapBottom - mapTop) / cellSize);
-        int startChunkX = centerChunkX - columns / 2;
-        int startChunkZ = centerChunkZ - rows / 2;
-        int playerChunkX = this.minecraft.player.chunkPosition().x;
-        int playerChunkZ = this.minecraft.player.chunkPosition().z;
+        renderChunkGrid(graphics);
+        graphics.drawCenteredString(this.font, summary, this.width / 2, mapBottom + 8, 0xFFB9C2CC);
+        renderLegend(graphics);
+        renderTooltip(graphics, mouseX, mouseY);
+    }
 
-        int savedCount = 0;
-        int queuedCount = 0;
-        int loadedCount = 0;
-        int hoveredChunkX = Integer.MIN_VALUE;
-        int hoveredChunkZ = Integer.MIN_VALUE;
-        ChunkState hoveredState = null;
+    private void renderChunkGrid(GuiGraphics graphics) {
+        int gridWidth = snapshotColumns * cellSize;
+        int gridHeight = snapshotRows * cellSize;
+        graphics.fill(gridLeft, gridTop, gridLeft + gridWidth, gridTop + gridHeight, MISSING_COLOR);
 
-        for (int row = 0; row < rows; row++) {
-            for (int column = 0; column < columns; column++) {
-                int chunkX = startChunkX + column;
-                int chunkZ = startChunkZ + row;
-                ChunkState state = getState(level, chunkX, chunkZ);
-                int x = mapLeft + column * cellSize;
-                int y = mapTop + row * cellSize;
+        for (int row = 0; row < snapshotRows; row++) {
+            for (int column = 0; column < snapshotColumns; column++) {
+                ChunkState state = snapshot[row * snapshotColumns + column];
+                if (state == ChunkState.MISSING) continue;
 
-                graphics.fill(x, y, x + cellSize - 1, y + cellSize - 1, state.color);
-                if (cellSize >= 8) {
-                    graphics.renderOutline(x, y, cellSize - 1, cellSize - 1, GRID_COLOR);
-                }
-                if (chunkX == playerChunkX && chunkZ == playerChunkZ) {
-                    graphics.renderOutline(x, y, cellSize - 1, cellSize - 1, PLAYER_COLOR);
-                    if (cellSize >= 7) {
-                        graphics.fill(x + cellSize / 2, y + cellSize / 2,
-                                x + cellSize / 2 + 1, y + cellSize / 2 + 1, PLAYER_COLOR);
-                    }
-                }
-
-                switch (state) {
-                    case SAVED -> savedCount++;
-                    case QUEUED -> queuedCount++;
-                    case LOADED -> loadedCount++;
-                    case MISSING -> {}
-                }
-
-                if (mouseX >= x && mouseX < x + cellSize && mouseY >= y && mouseY < y + cellSize) {
-                    hoveredChunkX = chunkX;
-                    hoveredChunkZ = chunkZ;
-                    hoveredState = state;
-                }
+                int x = gridLeft + column * cellSize;
+                int y = gridTop + row * cellSize;
+                graphics.fill(x, y, x + cellSize, y + cellSize, state.color);
             }
         }
 
-        Component summary = Component.translatable("swd.screen.chunk_map.summary", savedCount, queuedCount, loadedCount);
-        graphics.drawCenteredString(this.font, summary, this.width / 2, mapBottom + 8, 0xFFB9C2CC);
-        renderLegend(graphics);
-
-        if (hoveredState != null) {
-            graphics.setComponentTooltipForNextFrame(this.font, List.of(
-                    Component.translatable("swd.screen.chunk_map.chunk", hoveredChunkX, hoveredChunkZ),
-                    Component.translatable(hoveredState.translationKey)
-            ), mouseX, mouseY);
+        if (cellSize >= 6) {
+            for (int column = 0; column <= snapshotColumns; column++) {
+                int x = gridLeft + column * cellSize;
+                graphics.vLine(x, gridTop, gridTop + gridHeight, GRID_COLOR);
+            }
+            for (int row = 0; row <= snapshotRows; row++) {
+                int y = gridTop + row * cellSize;
+                graphics.hLine(gridLeft, gridLeft + gridWidth, y, GRID_COLOR);
+            }
         }
+
+        ChunkPos playerChunk = this.minecraft.player.chunkPosition();
+        int playerColumn = playerChunk.x - snapshotStartChunkX;
+        int playerRow = playerChunk.z - snapshotStartChunkZ;
+        if (playerColumn >= 0 && playerColumn < snapshotColumns && playerRow >= 0 && playerRow < snapshotRows) {
+            int x = gridLeft + playerColumn * cellSize;
+            int y = gridTop + playerRow * cellSize;
+            graphics.renderOutline(x, y, cellSize, cellSize, PLAYER_COLOR);
+            if (cellSize >= 7) {
+                graphics.fill(x + cellSize / 2, y + cellSize / 2,
+                        x + cellSize / 2 + 1, y + cellSize / 2 + 1, PLAYER_COLOR);
+            }
+        }
+    }
+
+    private void renderTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
+        int gridWidth = snapshotColumns * cellSize;
+        int gridHeight = snapshotRows * cellSize;
+        if (mouseX < gridLeft || mouseX >= gridLeft + gridWidth || mouseY < gridTop || mouseY >= gridTop + gridHeight) {
+            return;
+        }
+
+        int column = (mouseX - gridLeft) / cellSize;
+        int row = (mouseY - gridTop) / cellSize;
+        ChunkState state = snapshot[row * snapshotColumns + column];
+        graphics.setComponentTooltipForNextFrame(this.font, List.of(
+                Component.translatable("swd.screen.chunk_map.chunk",
+                        snapshotStartChunkX + column, snapshotStartChunkZ + row),
+                Component.translatable(state.translationKey)
+        ), mouseX, mouseY);
     }
 
     private void renderLegend(GuiGraphics graphics) {
@@ -156,6 +190,57 @@ public class ChunkMapScreen extends Screen {
         graphics.fill(x, y + 1, x + 8, y + 9, color);
         graphics.drawString(this.font, label, x + 12, y, 0xFFD6DCE2);
         return x + 18 + this.font.width(label);
+    }
+
+    private void refreshSnapshot() {
+        ClientLevel level = this.minecraft.level;
+        if (level == null || this.minecraft.player == null) {
+            snapshot = new ChunkState[0];
+            snapshotColumns = 0;
+            snapshotRows = 0;
+            summary = Component.empty();
+            snapshotDirty = false;
+            snapshotTicks = 0;
+            return;
+        }
+
+        int availableColumns = Math.max(1, (mapRight - mapLeft) / cellSize);
+        int availableRows = Math.max(1, (mapBottom - mapTop) / cellSize);
+        double scale = Math.min(1.0,
+                Math.sqrt((double) MAX_VISIBLE_CHUNKS / ((double) availableColumns * availableRows)));
+        snapshotColumns = Math.max(1, (int) Math.floor(availableColumns * scale));
+        snapshotRows = Math.max(1, (int) Math.floor(availableRows * scale));
+        snapshotStartChunkX = centerChunkX - snapshotColumns / 2;
+        snapshotStartChunkZ = centerChunkZ - snapshotRows / 2;
+        gridLeft = mapLeft + ((mapRight - mapLeft) - snapshotColumns * cellSize) / 2;
+        gridTop = mapTop + ((mapBottom - mapTop) - snapshotRows * cellSize) / 2;
+
+        int snapshotSize = snapshotColumns * snapshotRows;
+        if (snapshot.length != snapshotSize) {
+            snapshot = new ChunkState[snapshotSize];
+        }
+
+        int savedCount = 0;
+        int queuedCount = 0;
+        int loadedCount = 0;
+        for (int row = 0; row < snapshotRows; row++) {
+            for (int column = 0; column < snapshotColumns; column++) {
+                int chunkX = snapshotStartChunkX + column;
+                int chunkZ = snapshotStartChunkZ + row;
+                ChunkState state = getState(level, chunkX, chunkZ);
+                snapshot[row * snapshotColumns + column] = state;
+                switch (state) {
+                    case SAVED -> savedCount++;
+                    case QUEUED -> queuedCount++;
+                    case LOADED -> loadedCount++;
+                    case MISSING -> { }
+                }
+            }
+        }
+
+        summary = Component.translatable("swd.screen.chunk_map.summary", savedCount, queuedCount, loadedCount);
+        snapshotDirty = false;
+        snapshotTicks = 0;
     }
 
     private ChunkState getState(ClientLevel level, int chunkX, int chunkZ) {
@@ -184,7 +269,22 @@ public class ChunkMapScreen extends Screen {
             ChunkPos playerChunk = this.minecraft.player.chunkPosition();
             this.centerChunkX = playerChunk.x;
             this.centerChunkZ = playerChunk.z;
+            snapshotDirty = true;
         }
+    }
+
+    private void toggleDownload() {
+        SaveManager.toggle();
+        updateDownloadButton();
+        snapshotDirty = true;
+    }
+
+    private void updateDownloadButton() {
+        if (downloadButton == null) return;
+        downloadButton.setMessage(Component.translatable(SaveManager.isSaving
+                ? "swd.button.stop_download"
+                : "swd.button.start_download"));
+        downloadButton.active = this.minecraft != null && this.minecraft.level != null && this.minecraft.player != null;
     }
 
     private boolean isOverMap(double mouseX, double mouseY) {
@@ -214,11 +314,13 @@ public class ChunkMapScreen extends Screen {
             int direction = dragAccumulatorX > 0 ? -1 : 1;
             centerChunkX += direction;
             dragAccumulatorX += direction * cellSize;
+            snapshotDirty = true;
         }
         while (Math.abs(dragAccumulatorY) >= cellSize) {
             int direction = dragAccumulatorY > 0 ? -1 : 1;
             centerChunkZ += direction;
             dragAccumulatorY += direction * cellSize;
+            snapshotDirty = true;
         }
         return true;
     }
@@ -236,6 +338,7 @@ public class ChunkMapScreen extends Screen {
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
         if (isOverMap(mouseX, mouseY) && verticalAmount != 0) {
             cellSize = Math.clamp(cellSize + (verticalAmount > 0 ? 1 : -1), 4, 20);
+            snapshotDirty = true;
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
@@ -245,18 +348,22 @@ public class ChunkMapScreen extends Screen {
     public boolean keyPressed(KeyEvent event) {
         if (event.isLeft()) {
             centerChunkX--;
+            snapshotDirty = true;
             return true;
         }
         if (event.isRight()) {
             centerChunkX++;
+            snapshotDirty = true;
             return true;
         }
         if (event.isUp()) {
             centerChunkZ--;
+            snapshotDirty = true;
             return true;
         }
         if (event.isDown()) {
             centerChunkZ++;
+            snapshotDirty = true;
             return true;
         }
         return super.keyPressed(event);
@@ -287,4 +394,3 @@ public class ChunkMapScreen extends Screen {
         }
     }
 }
-

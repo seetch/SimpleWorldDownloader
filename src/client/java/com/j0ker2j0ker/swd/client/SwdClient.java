@@ -2,6 +2,7 @@ package com.j0ker2j0ker.swd.client;
 
 import com.j0ker2j0ker.swd.client.screen.ChunkMapScreen;
 import com.j0ker2j0ker.swd.client.screen.SwdConfigScreen;
+import com.j0ker2j0ker.swd.client.util.ChunkDownloadTracker;
 import com.j0ker2j0ker.swd.client.util.SaveManager;
 import com.j0ker2j0ker.swd.client.util.SwdBossBar;
 import com.j0ker2j0ker.swd.client.util.SwdConfig;
@@ -59,8 +60,10 @@ public class SwdClient implements ClientModInitializer {
         ));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             SaveManager.stop();
+            ChunkDownloadTracker.reset();
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            ChunkDownloadTracker.reset();
             if(SaveManager.isSaving) {
                 SaveManager.stop();
                 SaveManager.start();
@@ -103,6 +106,7 @@ public class SwdClient implements ClientModInitializer {
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            SaveManager.tick();
             while (CHUNK_MAP_KEY.consumeClick()) {
                 if (client.level != null && client.player != null && client.gui.screen() == null) {
                     client.setScreenAndShow(new ChunkMapScreen(null));
