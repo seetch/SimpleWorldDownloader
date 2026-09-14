@@ -24,8 +24,18 @@ Advancements and Statistics can only be saved if the corresponding UI's are open
 
 # Fabric API
 The Fabric API is required for this Mod to work. It can be downloaded [here](https://modrinth.com/mod/fabric-api).
+
+# Building
+Run `./gradlew buildAllVersions` to build the Minecraft 1.21.11 and 26.2 releases together.
+The finished JAR files are copied to `build/versions`.
+
 # Config
 Use "/swd config" to access the config.
+
+### Chunk Map
+Press `U` to open the chunk map. Green chunks are saved, yellow chunks are queued, blue chunks are loaded by the client, and gray chunks have not been loaded yet. Drag to move the map and use the mouse wheel to zoom.
+
+The key can be changed in Minecraft's key bindings. Mod Menu also provides buttons for the chunk map and key binding settings in the mod config screen.
 
 ### Auto Downloading
 Set whether worlds should be downloaded automatically on server joining.

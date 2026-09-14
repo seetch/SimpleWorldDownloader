@@ -37,5 +37,21 @@
   "swd.screen.config.notification_mode.bossbar": "Полоса босса",
   "swd.screen.config.notification_mode.off": "Выкл.",
   "swd.tooltip.notification_mode.1": "Выберите, как отображаются сообщения о загрузке:",
-  "swd.tooltip.notification_mode.2": "в панели действий, полосе босса или вообще не показывать."
+  "swd.tooltip.notification_mode.2": "в панели действий, полосе босса или вообще не показывать.",
+  "key.category.swd.controls": "Simple World Downloader",
+  "key.swd.open_chunk_map": "Открыть карту чанков",
+  "swd.button.chunk_map": "Карта чанков",
+  "swd.button.keybinds": "Настройка клавиш",
+  "swd.button.center_player": "К игроку",
+  "swd.screen.chunk_map.title": "Загруженные чанки",
+  "swd.screen.chunk_map.no_world": "Войдите в мир, чтобы увидеть чанки.",
+  "swd.screen.chunk_map.dimension": "Измерение: %s",
+  "swd.screen.chunk_map.active": "Загрузка активна",
+  "swd.screen.chunk_map.inactive": "Загрузка остановлена",
+  "swd.screen.chunk_map.summary": "Сохранено: %s   В очереди: %s   Загружено клиентом: %s",
+  "swd.screen.chunk_map.chunk": "Чанк %s, %s",
+  "swd.screen.chunk_map.state.saved": "Сохранён",
+  "swd.screen.chunk_map.state.queued": "В очереди",
+  "swd.screen.chunk_map.state.loaded": "Загружен клиентом",
+  "swd.screen.chunk_map.state.missing": "Не загружен"
 }

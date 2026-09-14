@@ -84,8 +84,8 @@ java {
 }
 
 jar {
-    from("LICENSE") {
-        rename { "${it}_${project.archivesBaseName}" }
+    from("LICENSE.txt") {
+        rename { "${it}_${project.archives_base_name}" }
     }
 }
 
@@ -105,4 +105,16 @@ publishing {
         // The repositories here will be used for publishing your artifact, not for
         // retrieving dependencies.
     }
+}
+
+tasks.register("build12111", GradleBuild) {
+    dir = file("versions/1.21.11")
+    tasks = ["build"]
+}
+
+tasks.register("buildAllVersions", Copy) {
+    dependsOn tasks.named("build"), tasks.named("build12111")
+    from(layout.buildDirectory.file("libs/${project.archives_base_name}-${project.mod_version}+${project.minecraft_version}.jar"))
+    from(file("versions/1.21.11/build/libs/${project.archives_base_name}-${project.mod_version}+1.21.11.jar"))
+    into(layout.buildDirectory.dir("versions"))
 }

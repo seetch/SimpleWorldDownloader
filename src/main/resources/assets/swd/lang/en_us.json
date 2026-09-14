@@ -37,6 +37,22 @@
   "swd.screen.config.notification_mode.bossbar": "Boss Bar",
   "swd.screen.config.notification_mode.off": "Off",
   "swd.tooltip.notification_mode.1": "Choose how download status messages",
-  "swd.tooltip.notification_mode.2": "are shown: action bar, boss bar, or not at all."
+  "swd.tooltip.notification_mode.2": "are shown: action bar, boss bar, or not at all.",
+  "key.category.swd.controls": "Simple World Downloader",
+  "key.swd.open_chunk_map": "Open chunk map",
+  "swd.button.chunk_map": "Chunk map",
+  "swd.button.keybinds": "Key bindings",
+  "swd.button.center_player": "Center on player",
+  "swd.screen.chunk_map.title": "Downloaded chunks",
+  "swd.screen.chunk_map.no_world": "Join a world to view chunks.",
+  "swd.screen.chunk_map.dimension": "Dimension: %s",
+  "swd.screen.chunk_map.active": "Download active",
+  "swd.screen.chunk_map.inactive": "Download stopped",
+  "swd.screen.chunk_map.summary": "Saved: %s   Queued: %s   Client loaded: %s",
+  "swd.screen.chunk_map.chunk": "Chunk %s, %s",
+  "swd.screen.chunk_map.state.saved": "Saved",
+  "swd.screen.chunk_map.state.queued": "Queued",
+  "swd.screen.chunk_map.state.loaded": "Client loaded",
+  "swd.screen.chunk_map.state.missing": "Not loaded"
 }
 

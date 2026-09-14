@@ -8,6 +8,7 @@ import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.CycleButton;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.options.controls.KeyBindsScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.CommonComponents;
 import org.jspecify.annotations.NonNull;
@@ -198,6 +199,16 @@ public class SwdConfigScreen extends Screen {
         for (SettingEntry setting : this.settings) {
             setting.addWidgets(this);
         }
+
+        Button chunkMapButton = this.addRenderableWidget(Button.builder(
+                Component.translatable("swd.button.chunk_map"),
+                b -> this.minecraft.setScreenAndShow(new ChunkMapScreen(this))
+        ).pos(centerX - 155, 40).width(150).build());
+        chunkMapButton.active = this.minecraft.level != null && this.minecraft.player != null;
+
+        this.addRenderableWidget(Button.builder(Component.translatable("swd.button.keybinds"),
+                b -> this.minecraft.setScreenAndShow(new KeyBindsScreen(this, this.minecraft.options)))
+                .pos(centerX + 5, 40).width(150).build());
 
         this.addRenderableWidget(Button.builder(Component.translatable("swd.button.reset"), b -> {
             for (SettingEntry setting : this.settings) {

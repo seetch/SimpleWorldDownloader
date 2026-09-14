@@ -3,41 +3,28 @@ package com.j0ker2j0ker.swd.client;
 import com.j0ker2j0ker.swd.client.screen.ChunkMapScreen;
 import com.j0ker2j0ker.swd.client.screen.SwdConfigScreen;
 import com.j0ker2j0ker.swd.client.util.SaveManager;
-import com.j0ker2j0ker.swd.client.util.SwdBossBar;
 import com.j0ker2j0ker.swd.client.util.SwdConfig;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
-import net.minecraft.client.gui.screens.inventory.AbstractFurnaceScreen;
-import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.InteractionResult;
-import net.minecraft.world.inventory.Slot;
-import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.lwjgl.glfw.GLFW;
 
 import java.nio.file.Path;
-import java.util.List;
-import java.util.Objects;
 
-import static com.mojang.brigadier.arguments.StringArgumentType.greedyString;
-import static com.mojang.brigadier.arguments.StringArgumentType.getString;
-import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument;
-import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
+import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal;
 
 public class SwdClient implements ClientModInitializer {
 
@@ -51,7 +38,7 @@ public class SwdClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         CONFIG = SwdConfig.load();
-        CHUNK_MAP_KEY = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+        CHUNK_MAP_KEY = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.swd.open_chunk_map",
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_U,
@@ -72,7 +59,9 @@ public class SwdClient implements ClientModInitializer {
         });
 
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
-            ScreenEvents.remove(screen).register(SaveManager::onScreenClosed);
+            ScreenEvents.remove(screen).register((closedScreen) -> {
+                SaveManager.onScreenClosed(closedScreen);
+            });
         });
 
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
@@ -93,19 +82,13 @@ public class SwdClient implements ClientModInitializer {
 
         UseEntityCallback.EVENT.register((player, level, hand, entity, hitResult) -> {
             SaveManager.lastClicked = entity;
-            SaveManager.onEntityInteract(entity);
             return InteractionResult.PASS;
-        });
-
-        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "bossbar"), (graphics, tickCounter) -> {
-            Minecraft client = Minecraft.getInstance();
-            SwdBossBar.render(graphics, client.font, client.getWindow().getGuiScaledWidth());
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (CHUNK_MAP_KEY.consumeClick()) {
-                if (client.level != null && client.player != null && client.gui.screen() == null) {
-                    client.setScreenAndShow(new ChunkMapScreen(null));
+                if (client.level != null && client.player != null && client.screen == null) {
+                    client.setScreen(new ChunkMapScreen(null));
                 }
             }
         });
@@ -120,8 +103,8 @@ public class SwdClient implements ClientModInitializer {
                             .then(literal("config")
                                     .executes(ctx -> {
                                         Minecraft.getInstance().execute(() ->
-                                                Minecraft.getInstance().setScreenAndShow(
-                                                        new SwdConfigScreen(Minecraft.getInstance().gui.screen())
+                                                Minecraft.getInstance().setScreen(
+                                                        new SwdConfigScreen(Minecraft.getInstance().screen)
                                                 )
                                         );
                                         return 1;
