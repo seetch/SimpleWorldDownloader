@@ -492,23 +492,26 @@ public class SaveManager {
 
         ListTag entityList = new ListTag();
 
-        net.minecraft.world.phys.AABB box = new net.minecraft.world.phys.AABB(
-                pos.getMinBlockX(), wc.getLevel().getMinY(), pos.getMinBlockZ(),
-                pos.getMaxBlockX(), wc.getLevel().getMaxY(), pos.getMaxBlockZ()
-        );
+        if (SwdClient.CONFIG.includeEntities) {
+            net.minecraft.world.phys.AABB box = new net.minecraft.world.phys.AABB(
+                    pos.getMinBlockX(), wc.getLevel().getMinY(), pos.getMinBlockZ(),
+                    pos.getMaxBlockX(), wc.getLevel().getMaxY(), pos.getMaxBlockZ()
+            );
 
-        wc.getLevel().getEntities(null, box).forEach(entity -> {
-            if (entity instanceof Player player) {
-                if (SwdClient.CONFIG.includeEntities && isLikelyPlayerNpc(player)) {
-                    buildPlayerNpcNbt(player).ifPresent(entityList::add);
+            wc.getLevel().getEntities(null, box).forEach(entity -> {
+                if (entity instanceof Player player) {
+                    if (isLikelyPlayerNpc(player)) {
+                        buildPlayerNpcNbt(player).ifPresent(entityList::add);
+                    }
+                    return;
                 }
-                return;
-            }
 
-            CompoundTag entityNbt = saveEntityToNbt(entity);
-            injectCachedEntityInventory(entity, entityNbt);
-            entityList.add(entityNbt);
-        });
+                CompoundTag entityNbt = saveEntityToNbt(entity);
+                freezeSavedNpc(entity, entityNbt);
+                injectCachedEntityInventory(entity, entityNbt);
+                entityList.add(entityNbt);
+            });
+        }
 
         chunk.put("Entities", entityList);
 
@@ -594,6 +597,13 @@ public class SaveManager {
         }
     }
 
+    private static void freezeSavedNpc(net.minecraft.world.entity.Entity entity, CompoundTag entityNbt) {
+        if (entity instanceof net.minecraft.world.entity.Mob) {
+            entityNbt.putBoolean("NoAI", true);
+            entityNbt.putBoolean("PersistenceRequired", true);
+        }
+    }
+
     private static boolean isLikelyPlayerNpc(Player player) {
         ClientPacketListener connection = mc.getConnection();
         return SwdClient.CONFIG.includePlayerNpcs
@@ -620,8 +630,6 @@ public class SaveManager {
         mannequin.setPose(toMannequinPose(player.getPose()));
         mannequin.setUUID(UUID.nameUUIDFromBytes(
                 ("swd:player_npc:" + player.getUUID()).getBytes(StandardCharsets.UTF_8)));
-        mannequin.setCustomName(player.getDisplayName());
-        mannequin.setCustomNameVisible(true);
         mannequin.setInvisible(player.isInvisible());
         mannequin.setNoGravity(true);
         mannequin.setInvulnerable(true);

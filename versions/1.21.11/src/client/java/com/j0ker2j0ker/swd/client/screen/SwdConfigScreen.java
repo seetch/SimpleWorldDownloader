@@ -17,12 +17,14 @@ public class SwdConfigScreen extends Screen {
     private final Screen parent;
     private EditBox nameField;
     private Checkbox autoDownloadCheckbox;
+    private Checkbox entitiesCheckbox;
     private Checkbox playerNpcsCheckbox;
 
     // layout
     private int centerX;
     private int nameLabelX, nameLabelY;
     private int autoLabelX, autoLabelY;
+    private int entitiesLabelX, entitiesLabelY;
     private int playerNpcsLabelX, playerNpcsLabelY;
 
     // description texts
@@ -42,6 +44,11 @@ public class SwdConfigScreen extends Screen {
             Component.translatable("swd.tooltip.include_player_npcs.2")
     );
 
+    private static final List<Component> ENTITIES_DESC = List.of(
+            Component.translatable("swd.tooltip.include_entities.1"),
+            Component.translatable("swd.tooltip.include_entities.2")
+    );
+
     private static final List<ClientTooltipComponent> NAME_TOOLTIP = NAME_DESC.stream()
             .map(Component::getVisualOrderText)
             .map(ClientTooltipComponent::create)
@@ -53,6 +60,11 @@ public class SwdConfigScreen extends Screen {
             .toList();
 
     private static final List<ClientTooltipComponent> PLAYER_NPCS_TOOLTIP = PLAYER_NPCS_DESC.stream()
+            .map(Component::getVisualOrderText)
+            .map(ClientTooltipComponent::create)
+            .toList();
+
+    private static final List<ClientTooltipComponent> ENTITIES_TOOLTIP = ENTITIES_DESC.stream()
             .map(Component::getVisualOrderText)
             .map(ClientTooltipComponent::create)
             .toList();
@@ -71,8 +83,10 @@ public class SwdConfigScreen extends Screen {
         this.nameLabelY = 75;
         this.autoLabelX = centerX - 180;
         this.autoLabelY = 115;
+        this.entitiesLabelX = centerX - 180;
+        this.entitiesLabelY = 140;
         this.playerNpcsLabelX = centerX - 180;
-        this.playerNpcsLabelY = 140;
+        this.playerNpcsLabelY = 165;
 
         // move inputs right + smaller text box
         int nameFieldX = centerX - 20;   // was much more left before
@@ -85,8 +99,10 @@ public class SwdConfigScreen extends Screen {
 
         int autoCheckboxX = centerX - 20;
         int autoCheckboxY = 110;
+        int entitiesCheckboxX = centerX - 20;
+        int entitiesCheckboxY = 135;
         int playerNpcsCheckboxX = centerX - 20;
-        int playerNpcsCheckboxY = 135;
+        int playerNpcsCheckboxY = 160;
 
         this.nameField = new EditBox(this.font, nameFieldX, nameFieldY, nameFieldW, nameFieldH,
                 Component.literal("World name to save as"));
@@ -104,6 +120,12 @@ public class SwdConfigScreen extends Screen {
                 .selected(SwdClient.CONFIG.autoDownload)
                 .build();
         this.addRenderableWidget(this.autoDownloadCheckbox);
+
+        this.entitiesCheckbox = Checkbox.builder(Component.empty(), this.font)
+                .pos(entitiesCheckboxX, entitiesCheckboxY)
+                .selected(SwdClient.CONFIG.includeEntities)
+                .build();
+        this.addRenderableWidget(this.entitiesCheckbox);
 
         this.playerNpcsCheckbox = Checkbox.builder(Component.empty(), this.font)
                 .pos(playerNpcsCheckboxX, playerNpcsCheckboxY)
@@ -124,6 +146,7 @@ public class SwdConfigScreen extends Screen {
         this.addRenderableWidget(Button.builder(Component.literal("Save"), b -> {
             SwdClient.CONFIG.saveWorldTo = this.nameField.getValue().trim();
             SwdClient.CONFIG.autoDownload = this.autoDownloadCheckbox.selected();
+            SwdClient.CONFIG.includeEntities = this.entitiesCheckbox.selected();
             SwdClient.CONFIG.includePlayerNpcs = this.playerNpcsCheckbox.selected();
             SwdClient.CONFIG.save();
             this.onClose();
@@ -140,6 +163,8 @@ public class SwdConfigScreen extends Screen {
         graphics.drawCenteredString(this.font, this.title, this.width / 2, 20, 0xFFFFFFFF);
         graphics.drawString(this.font, Component.literal("Save world to:"), nameLabelX, nameLabelY, 0xFFFFFFFF);
         graphics.drawString(this.font, Component.literal("Automatically download:"), autoLabelX, autoLabelY, 0xFFFFFFFF);
+        graphics.drawString(this.font, Component.translatable("swd.screen.config.label.include_entities"),
+                entitiesLabelX, entitiesLabelY, 0xFFFFFFFF);
         graphics.drawString(this.font, Component.translatable("swd.screen.config.label.include_player_npcs"),
                 playerNpcsLabelX, playerNpcsLabelY, 0xFFFFFFFF);
 
@@ -149,6 +174,12 @@ public class SwdConfigScreen extends Screen {
 
         boolean hoverAutoLabel = isHovering(mouseX, mouseY, autoLabelX, autoLabelY, this.font.width("Automatically download:"), 10);
         boolean hoverAutoCheckbox = this.autoDownloadCheckbox != null && this.autoDownloadCheckbox.isMouseOver(mouseX, mouseY);
+
+        Component entitiesLabel = Component.translatable("swd.screen.config.label.include_entities");
+        boolean hoverEntitiesLabel = isHovering(mouseX, mouseY, entitiesLabelX, entitiesLabelY,
+                this.font.width(entitiesLabel), 10);
+        boolean hoverEntitiesCheckbox = this.entitiesCheckbox != null
+                && this.entitiesCheckbox.isMouseOver(mouseX, mouseY);
 
         Component playerNpcsLabel = Component.translatable("swd.screen.config.label.include_player_npcs");
         boolean hoverPlayerNpcsLabel = isHovering(mouseX, mouseY, playerNpcsLabelX, playerNpcsLabelY,
@@ -160,6 +191,9 @@ public class SwdConfigScreen extends Screen {
             graphics.renderTooltip(this.font, NAME_TOOLTIP, mouseX, mouseY, DefaultTooltipPositioner.INSTANCE, null);
         } else if (hoverAutoLabel || hoverAutoCheckbox) {
             graphics.renderTooltip(this.font, AUTO_TOOLTIP, mouseX, mouseY, DefaultTooltipPositioner.INSTANCE, null);
+        } else if (hoverEntitiesLabel || hoverEntitiesCheckbox) {
+            graphics.renderTooltip(this.font, ENTITIES_TOOLTIP, mouseX, mouseY,
+                    DefaultTooltipPositioner.INSTANCE, null);
         } else if (hoverPlayerNpcsLabel || hoverPlayerNpcsCheckbox) {
             graphics.renderTooltip(this.font, PLAYER_NPCS_TOOLTIP, mouseX, mouseY,
                     DefaultTooltipPositioner.INSTANCE, null);

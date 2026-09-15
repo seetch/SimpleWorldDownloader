@@ -610,6 +610,7 @@ public class SaveManager {
                 }
 
                 CompoundTag entityNbt = saveEntityToNbt(entity);
+                freezeSavedNpc(entity, entityNbt);
 
                 // Entity persistence: merge cached inventory/override data for interacted entities.
                 // The server sends complete data for basic entities (cows, sheep, zombies, etc.)
@@ -708,6 +709,13 @@ public class SaveManager {
         }
     }
 
+    private static void freezeSavedNpc(net.minecraft.world.entity.Entity entity, CompoundTag entityNbt) {
+        if (entity instanceof net.minecraft.world.entity.Mob) {
+            entityNbt.putBoolean("NoAI", true);
+            entityNbt.putBoolean("PersistenceRequired", true);
+        }
+    }
+
     private static boolean isLikelyPlayerNpc(Player player) {
         ClientPacketListener connection = mc.getConnection();
         return SwdClient.CONFIG.includePlayerNpcs
@@ -734,8 +742,6 @@ public class SaveManager {
         mannequin.setPose(toMannequinPose(player.getPose()));
         mannequin.setUUID(UUID.nameUUIDFromBytes(
                 ("swd:player_npc:" + player.getUUID()).getBytes(StandardCharsets.UTF_8)));
-        mannequin.setCustomName(player.getDisplayName());
-        mannequin.setCustomNameVisible(true);
         mannequin.setInvisible(player.isInvisible());
         mannequin.setNoGravity(true);
         mannequin.setInvulnerable(true);
@@ -1362,6 +1368,7 @@ public class SaveManager {
                 dimension,
                 isResumingExistingWorld,
                 touchedChunks.contains(chunkKey),
+                SwdClient.CONFIG.includeEntities,
                 dedupKey
         ));
 
@@ -1431,7 +1438,7 @@ public class SaveManager {
                         oldBlockNbt = blockStorage.read(task.pos, task.dimension);
                         boolean hasRealChunk = oldBlockNbt != null && !isEmptyChunkNbt(oldBlockNbt);
                         skipBlockWrite = hasRealChunk;
-                        skipEntityWrite = hasRealChunk;
+                    skipEntityWrite = hasRealChunk && task.includeEntities;
                     } catch (IOException ignored) {
                     }
                 }
@@ -1453,7 +1460,7 @@ public class SaveManager {
 
                 if (!skipEntityWrite) {
                     CompoundTag finalEntityNbt = task.entityNbt;
-                    if (task.resumingExistingWorld && task.touched && task.entityNbt != null) {
+                    if (task.includeEntities && task.resumingExistingWorld && task.touched && task.entityNbt != null) {
                         try {
                             CompoundTag oldEntityNbt = entityStorage.read(task.pos, task.dimension);
                             if (oldEntityNbt != null) {
@@ -1880,7 +1887,8 @@ public class SaveManager {
 
     private record ChunkSaveTask(Path worldFolder, ChunkPos pos, CompoundTag blockNbt, CompoundTag entityNbt,
                                  net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
-                                 boolean resumingExistingWorld, boolean touched, String dedupKey) {
+                                 boolean resumingExistingWorld, boolean touched, boolean includeEntities,
+                                 String dedupKey) {
     }
 
     private record StorageKey(Path worldFolder,
