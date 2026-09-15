@@ -19,6 +19,7 @@ public final class ChunkDownloadTracker {
     private static final int REGION_HEADER_BYTES = 4096;
     private static final Map<String, Set<Long>> queuedChunks = new ConcurrentHashMap<>();
     private static final Map<String, Set<Long>> savedChunks = new ConcurrentHashMap<>();
+    private static final Map<String, Set<Long>> loadedChunks = new ConcurrentHashMap<>();
     private static final AtomicLong generation = new AtomicLong();
 
     private ChunkDownloadTracker() {}
@@ -27,6 +28,7 @@ public final class ChunkDownloadTracker {
         generation.incrementAndGet();
         queuedChunks.clear();
         savedChunks.clear();
+        loadedChunks.clear();
     }
 
     public static void clearQueued() {
@@ -40,6 +42,10 @@ public final class ChunkDownloadTracker {
 
     public static void markQueued(ChunkPos pos, ResourceKey<Level> dimension) {
         getChunks(queuedChunks, dimensionId(dimension)).add(ChunkPos.asLong(pos.x, pos.z));
+    }
+
+    public static void markLoaded(ChunkPos pos, ResourceKey<Level> dimension) {
+        getChunks(loadedChunks, dimensionId(dimension)).add(ChunkPos.asLong(pos.x, pos.z));
     }
 
     public static void markSaved(ChunkPos pos, ResourceKey<Level> dimension) {
@@ -59,6 +65,10 @@ public final class ChunkDownloadTracker {
 
     public static boolean isSaved(int chunkX, int chunkZ, ResourceKey<Level> dimension) {
         return contains(savedChunks, dimensionId(dimension), ChunkPos.asLong(chunkX, chunkZ));
+    }
+
+    public static boolean isLoaded(int chunkX, int chunkZ, ResourceKey<Level> dimension) {
+        return contains(loadedChunks, dimensionId(dimension), ChunkPos.asLong(chunkX, chunkZ));
     }
 
     private static void scanRegionFiles(Path worldFolder, long expectedGeneration) {
@@ -146,4 +156,3 @@ public final class ChunkDownloadTracker {
         if (dimensionChunks != null) dimensionChunks.remove(packedPos);
     }
 }
-

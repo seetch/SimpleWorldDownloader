@@ -61,6 +61,10 @@ public final class WorldSessionTracker {
         return Math.max(1, targets.size());
     }
 
+    public static synchronized String getSelectedKey() {
+        return serverKey() + "|world-" + getSelectedNumber();
+    }
+
     public static synchronized boolean isSelectedCurrent() {
         return selectedTarget < 0 || selectedTarget == currentTarget;
     }
@@ -100,13 +104,18 @@ public final class WorldSessionTracker {
     }
 
     private static int nextSlot(String serverKey) {
-        if (SwdClient.CONFIG.worldTargetSlots == null) return 1;
+        int activeMaximum = targets.stream()
+                .mapToInt(WorldTarget::slot)
+                .max()
+                .orElse(0);
+        if (SwdClient.CONFIG.worldTargetSlots == null) return activeMaximum + 1;
         String prefix = serverKey + "|";
-        return SwdClient.CONFIG.worldTargetSlots.entrySet().stream()
+        int configuredMaximum = SwdClient.CONFIG.worldTargetSlots.entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith(prefix))
                 .mapToInt(entry -> entry.getValue() != null ? entry.getValue() : 0)
                 .max()
-                .orElse(0) + 1;
+                .orElse(0);
+        return Math.max(activeMaximum, configuredMaximum) + 1;
     }
 
     private static String serverKey() {

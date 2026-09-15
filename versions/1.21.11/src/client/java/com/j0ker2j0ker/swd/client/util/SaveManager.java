@@ -111,6 +111,7 @@ public class SaveManager {
     public static volatile boolean isSaving = false;
     public static String name;
     public static Path path;
+    private static String trackedWorldTargetKey;
 
     private static HashMap<BlockPos, List<ItemStack>> cacheBlockInventories;
     private static HashMap<UUID, List<ItemStack>> cacheEntityInventories;
@@ -154,18 +155,37 @@ public class SaveManager {
         }
     }
 
-    public static void start() {
-        if(isSaving || mc.player == null) return;
+    public static void onEntityLoaded(net.minecraft.world.entity.Entity entity) {
+        if (!isSaving || !SwdClient.CONFIG.includeEntities || mc.level == null || entity.level() != mc.level) return;
+        saveChunkNow(entity.blockPosition());
+    }
 
-        captureQueue.clear();
-        scheduledCaptures.clear();
-        ChunkDownloadTracker.reset();
-        ops = Objects.requireNonNull(mc.level).registryAccess().createSerializationContext(NbtOps.INSTANCE);
-        isSaving = true;
+    public static void refreshSelectedWorldTracking() {
+        String selectedKey = WorldSessionTracker.getSelectedKey();
+        if (Objects.equals(trackedWorldTargetKey, selectedKey) && path != null) return;
 
         determineWorldName();
         path = mc.getLevelSource().getBaseDir().resolve(name);
+        trackedWorldTargetKey = selectedKey;
+        ChunkDownloadTracker.reset();
         ChunkDownloadTracker.loadExisting(path);
+    }
+
+    public static void resetWorldTracking() {
+        trackedWorldTargetKey = null;
+        name = null;
+        path = null;
+        ChunkDownloadTracker.reset();
+    }
+
+    public static void start() {
+        if(isSaving || mc.player == null || !WorldSessionTracker.isSelectedCurrent()) return;
+
+        captureQueue.clear();
+        scheduledCaptures.clear();
+        ops = Objects.requireNonNull(mc.level).registryAccess().createSerializationContext(NbtOps.INSTANCE);
+        refreshSelectedWorldTracking();
+        isSaving = true;
 
         setupWorldFolder();
         if (SwdClient.CONFIG.includePlayerData) {
@@ -187,7 +207,7 @@ public class SaveManager {
         bootstrapAdvancementsFromClientCache();
 
         printStatus("§a> Started saving chunks...");
-        saveChunksAround(12);
+        saveChunksAround(mc.options.renderDistance().get());
     }
 
     public static void stop() {

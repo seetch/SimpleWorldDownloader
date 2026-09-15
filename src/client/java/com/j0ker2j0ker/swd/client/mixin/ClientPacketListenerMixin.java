@@ -10,6 +10,7 @@ import net.minecraft.network.protocol.game.ClientboundAwardStatsPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundUpdateAdvancementsPacket;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -34,19 +35,19 @@ public abstract class ClientPacketListenerMixin {
     @Inject(method = "handleLogin", at = @At("TAIL"))
     private void afterHandleLogin(ClientboundLoginPacket packet, CallbackInfo ci) {
         ClientPacketListener listener = (ClientPacketListener) (Object) this;
-        if (WorldSessionTracker.onLogin(listener, packet)) {
-            ChunkDownloadTracker.reset();
-        }
+        WorldSessionTracker.onLogin(listener, packet);
+        SaveManager.refreshSelectedWorldTracking();
     }
 
     @Inject(method = "handleLevelChunkWithLight", at = @At("TAIL"))
     private void handleLevelChunkWithLight(ClientboundLevelChunkWithLightPacket packet, CallbackInfo ci) {
+        int chunkX = packet.getX();
+        int chunkZ = packet.getZ();
+        ChunkDownloadTracker.markLoaded(new ChunkPos(chunkX, chunkZ), this.level.dimension());
         if(!SaveManager.isSaving) return;
 
         Minecraft mc = Minecraft.getInstance();
         if(mc.isLocalServer() || mc.getCurrentServer() == null) return;
-        int chunkX = packet.getX();
-        int chunkZ = packet.getZ();
         LevelChunk wc = this.level.getChunkSource().getChunk(chunkX, chunkZ, false);
         if (wc == null || wc.isEmpty() || mc.level == null) return;
 

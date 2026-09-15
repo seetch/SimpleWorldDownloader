@@ -60,6 +60,9 @@ public class ChunkMapScreen extends Screen {
 
     @Override
     protected void init() {
+        if (!SaveManager.isSaving) {
+            SaveManager.refreshSelectedWorldTracking();
+        }
         updateMapBounds();
         if (!centerInitialized) {
             centerOnPlayer();
@@ -261,9 +264,14 @@ public class ChunkMapScreen extends Screen {
         if (ChunkDownloadTracker.isSaved(chunkX, chunkZ, level.dimension())) {
             return ChunkState.SAVED;
         }
-        LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
-        if (chunk != null && !chunk.isEmpty()) {
+        if (ChunkDownloadTracker.isLoaded(chunkX, chunkZ, level.dimension())) {
             return ChunkState.LOADED;
+        }
+        if (WorldSessionTracker.isSelectedCurrent()) {
+            LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
+            if (chunk != null && !chunk.isEmpty()) {
+                return ChunkState.LOADED;
+            }
         }
         return ChunkState.MISSING;
     }
@@ -285,6 +293,7 @@ public class ChunkMapScreen extends Screen {
     }
 
     private void toggleDownload() {
+        if (!WorldSessionTracker.isSelectedCurrent()) return;
         SaveManager.toggle();
         updateDownloadButton();
         snapshotDirty = true;
@@ -295,7 +304,8 @@ public class ChunkMapScreen extends Screen {
         downloadButton.setMessage(Component.translatable(SaveManager.isSaving
                 ? "swd.button.stop_download"
                 : "swd.button.start_download"));
-        downloadButton.active = this.minecraft != null && this.minecraft.level != null && this.minecraft.player != null;
+        downloadButton.active = this.minecraft != null && this.minecraft.level != null
+                && this.minecraft.player != null && WorldSessionTracker.isSelectedCurrent();
     }
 
     private void cycleWorldTarget() {
@@ -303,7 +313,7 @@ public class ChunkMapScreen extends Screen {
         if (SaveManager.isSaving) {
             SaveManager.stop();
         }
-        ChunkDownloadTracker.reset();
+        SaveManager.refreshSelectedWorldTracking();
         updateWorldButton();
         snapshotDirty = true;
     }

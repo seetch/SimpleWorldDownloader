@@ -2,7 +2,6 @@ package com.j0ker2j0ker.swd.client;
 
 import com.j0ker2j0ker.swd.client.screen.ChunkMapScreen;
 import com.j0ker2j0ker.swd.client.screen.SwdConfigScreen;
-import com.j0ker2j0ker.swd.client.util.ChunkDownloadTracker;
 import com.j0ker2j0ker.swd.client.util.SaveManager;
 import com.j0ker2j0ker.swd.client.util.SwdConfig;
 import com.j0ker2j0ker.swd.client.util.WorldSessionTracker;
@@ -10,6 +9,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientEntityEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -48,12 +48,12 @@ public class SwdClient implements ClientModInitializer {
         ));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             SaveManager.stop();
-            ChunkDownloadTracker.reset();
+            SaveManager.resetWorldTracking();
             WorldSessionTracker.reset();
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             WorldSessionTracker.ensureConnection(handler);
-            ChunkDownloadTracker.reset();
+            SaveManager.refreshSelectedWorldTracking();
             if(SaveManager.isSaving) {
                 SaveManager.stop();
                 SaveManager.start();
@@ -90,6 +90,8 @@ public class SwdClient implements ClientModInitializer {
             SaveManager.lastClicked = entity;
             return InteractionResult.PASS;
         });
+
+        ClientEntityEvents.ENTITY_LOAD.register((entity, level) -> SaveManager.onEntityLoaded(entity));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             SaveManager.tick();
