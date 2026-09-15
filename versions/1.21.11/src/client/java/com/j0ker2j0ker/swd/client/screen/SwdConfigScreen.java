@@ -17,11 +17,13 @@ public class SwdConfigScreen extends Screen {
     private final Screen parent;
     private EditBox nameField;
     private Checkbox autoDownloadCheckbox;
+    private Checkbox playerNpcsCheckbox;
 
     // layout
     private int centerX;
     private int nameLabelX, nameLabelY;
     private int autoLabelX, autoLabelY;
+    private int playerNpcsLabelX, playerNpcsLabelY;
 
     // description texts
     private static final List<Component> NAME_DESC = List.of(
@@ -35,12 +37,22 @@ public class SwdConfigScreen extends Screen {
             Component.literal("automatically on server joining.")
     );
 
+    private static final List<Component> PLAYER_NPCS_DESC = List.of(
+            Component.translatable("swd.tooltip.include_player_npcs.1"),
+            Component.translatable("swd.tooltip.include_player_npcs.2")
+    );
+
     private static final List<ClientTooltipComponent> NAME_TOOLTIP = NAME_DESC.stream()
             .map(Component::getVisualOrderText)
             .map(ClientTooltipComponent::create)
             .toList();
 
     private static final List<ClientTooltipComponent> AUTO_TOOLTIP = AUTO_DESC.stream()
+            .map(Component::getVisualOrderText)
+            .map(ClientTooltipComponent::create)
+            .toList();
+
+    private static final List<ClientTooltipComponent> PLAYER_NPCS_TOOLTIP = PLAYER_NPCS_DESC.stream()
             .map(Component::getVisualOrderText)
             .map(ClientTooltipComponent::create)
             .toList();
@@ -59,6 +71,8 @@ public class SwdConfigScreen extends Screen {
         this.nameLabelY = 75;
         this.autoLabelX = centerX - 180;
         this.autoLabelY = 115;
+        this.playerNpcsLabelX = centerX - 180;
+        this.playerNpcsLabelY = 140;
 
         // move inputs right + smaller text box
         int nameFieldX = centerX - 20;   // was much more left before
@@ -71,6 +85,8 @@ public class SwdConfigScreen extends Screen {
 
         int autoCheckboxX = centerX - 20;
         int autoCheckboxY = 110;
+        int playerNpcsCheckboxX = centerX - 20;
+        int playerNpcsCheckboxY = 135;
 
         this.nameField = new EditBox(this.font, nameFieldX, nameFieldY, nameFieldW, nameFieldH,
                 Component.literal("World name to save as"));
@@ -89,6 +105,12 @@ public class SwdConfigScreen extends Screen {
                 .build();
         this.addRenderableWidget(this.autoDownloadCheckbox);
 
+        this.playerNpcsCheckbox = Checkbox.builder(Component.empty(), this.font)
+                .pos(playerNpcsCheckboxX, playerNpcsCheckboxY)
+                .selected(SwdClient.CONFIG.includePlayerNpcs)
+                .build();
+        this.addRenderableWidget(this.playerNpcsCheckbox);
+
         Button chunkMapButton = this.addRenderableWidget(Button.builder(
                 Component.translatable("swd.button.chunk_map"),
                 b -> this.minecraft.setScreen(new ChunkMapScreen(this))
@@ -102,6 +124,7 @@ public class SwdConfigScreen extends Screen {
         this.addRenderableWidget(Button.builder(Component.literal("Save"), b -> {
             SwdClient.CONFIG.saveWorldTo = this.nameField.getValue().trim();
             SwdClient.CONFIG.autoDownload = this.autoDownloadCheckbox.selected();
+            SwdClient.CONFIG.includePlayerNpcs = this.playerNpcsCheckbox.selected();
             SwdClient.CONFIG.save();
             this.onClose();
         }).pos(centerX - 155, this.height - 50).width(150).build());
@@ -117,6 +140,8 @@ public class SwdConfigScreen extends Screen {
         graphics.drawCenteredString(this.font, this.title, this.width / 2, 20, 0xFFFFFFFF);
         graphics.drawString(this.font, Component.literal("Save world to:"), nameLabelX, nameLabelY, 0xFFFFFFFF);
         graphics.drawString(this.font, Component.literal("Automatically download:"), autoLabelX, autoLabelY, 0xFFFFFFFF);
+        graphics.drawString(this.font, Component.translatable("swd.screen.config.label.include_player_npcs"),
+                playerNpcsLabelX, playerNpcsLabelY, 0xFFFFFFFF);
 
         // hover descriptions (over label text or over input widgets)
         boolean hoverNameLabel = isHovering(mouseX, mouseY, nameLabelX, nameLabelY, this.font.width("Save world to:"), 10);
@@ -125,10 +150,19 @@ public class SwdConfigScreen extends Screen {
         boolean hoverAutoLabel = isHovering(mouseX, mouseY, autoLabelX, autoLabelY, this.font.width("Automatically download:"), 10);
         boolean hoverAutoCheckbox = this.autoDownloadCheckbox != null && this.autoDownloadCheckbox.isMouseOver(mouseX, mouseY);
 
+        Component playerNpcsLabel = Component.translatable("swd.screen.config.label.include_player_npcs");
+        boolean hoverPlayerNpcsLabel = isHovering(mouseX, mouseY, playerNpcsLabelX, playerNpcsLabelY,
+                this.font.width(playerNpcsLabel), 10);
+        boolean hoverPlayerNpcsCheckbox = this.playerNpcsCheckbox != null
+                && this.playerNpcsCheckbox.isMouseOver(mouseX, mouseY);
+
         if (hoverNameLabel || hoverNameField) {
             graphics.renderTooltip(this.font, NAME_TOOLTIP, mouseX, mouseY, DefaultTooltipPositioner.INSTANCE, null);
         } else if (hoverAutoLabel || hoverAutoCheckbox) {
             graphics.renderTooltip(this.font, AUTO_TOOLTIP, mouseX, mouseY, DefaultTooltipPositioner.INSTANCE, null);
+        } else if (hoverPlayerNpcsLabel || hoverPlayerNpcsCheckbox) {
+            graphics.renderTooltip(this.font, PLAYER_NPCS_TOOLTIP, mouseX, mouseY,
+                    DefaultTooltipPositioner.INSTANCE, null);
         }
     }
 

@@ -7,6 +7,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 
 public class SwdConfig {
 
@@ -21,8 +23,10 @@ public class SwdConfig {
     public boolean resumeDownloads = true;
     public NotificationMode notificationMode = NotificationMode.ACTIONBAR;
     public boolean includeEntities = true;
+    public boolean includePlayerNpcs = true;
     public boolean includePlayerData = true;
     public boolean includeResourcePacks = true;
+    public Map<String, Integer> worldTargetSlots = new HashMap<>();
 
     private static final Gson GSON =
             new GsonBuilder().setPrettyPrinting().create();

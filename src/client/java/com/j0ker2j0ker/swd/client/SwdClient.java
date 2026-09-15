@@ -6,6 +6,7 @@ import com.j0ker2j0ker.swd.client.util.ChunkDownloadTracker;
 import com.j0ker2j0ker.swd.client.util.SaveManager;
 import com.j0ker2j0ker.swd.client.util.SwdBossBar;
 import com.j0ker2j0ker.swd.client.util.SwdConfig;
+import com.j0ker2j0ker.swd.client.util.WorldSessionTracker;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -61,8 +62,10 @@ public class SwdClient implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             SaveManager.stop();
             ChunkDownloadTracker.reset();
+            WorldSessionTracker.reset();
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            WorldSessionTracker.ensureConnection(handler);
             ChunkDownloadTracker.reset();
             if(SaveManager.isSaving) {
                 SaveManager.stop();

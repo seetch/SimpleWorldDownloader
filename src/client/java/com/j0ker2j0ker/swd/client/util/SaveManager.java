@@ -55,12 +55,19 @@ import net.minecraft.world.item.trading.MerchantOffers;
 import net.minecraft.world.entity.npc.villager.AbstractVillager;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.npc.villager.VillagerData;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.decoration.Mannequin;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.component.ResolvableProfile;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -81,6 +88,14 @@ public class SaveManager {
     private static final int PLAYER_INVENTORY_SLOTS = 36;
     private static final int DOUBLE_CHEST_SLOTS = 54;
     private static final int SINGLE_CHEST_SLOTS = 27;
+    private static final List<EquipmentSlot> PLAYER_NPC_EQUIPMENT_SLOTS = List.of(
+            EquipmentSlot.MAINHAND,
+            EquipmentSlot.OFFHAND,
+            EquipmentSlot.FEET,
+            EquipmentSlot.LEGS,
+            EquipmentSlot.CHEST,
+            EquipmentSlot.HEAD
+    );
     private static final long META_FLUSH_INTERVAL_MS = 5000L;
     private static final DateTimeFormatter ADVANCEMENT_TIME_FORMAT = DateTimeFormatter
             .ofPattern("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT)
@@ -558,7 +573,7 @@ public class SaveManager {
             // Clear dedup so that subsequent saveChunkNow calls with fresh
             // cache data (from onScreenClosed → cacheVillagerMerchantData,
             // handleBlockContainer, etc.) are not silently dropped.
-            queuedChunks.remove(packChunkDimKey(wc.getPos(), mc.level.dimension()));
+            queuedChunks.remove(packWorldChunkKey(path, wc.getPos(), mc.level.dimension()));
             saveChunkToRegion(path, wc, false, mc.level.dimension());
         }
     }
@@ -587,7 +602,12 @@ public class SaveManager {
             );
 
             wc.getLevel().getEntities(null, box).forEach(entity -> {
-                if (entity instanceof net.minecraft.world.entity.player.Player) return;
+                if (entity instanceof Player player) {
+                    if (isLikelyPlayerNpc(player)) {
+                        buildPlayerNpcNbt(player).ifPresent(entityList::add);
+                    }
+                    return;
+                }
 
                 CompoundTag entityNbt = saveEntityToNbt(entity);
 
@@ -684,8 +704,58 @@ public class SaveManager {
 
             entity.save(output);
 
-            return output.buildResult();
+        return output.buildResult();
         }
+    }
+
+    private static boolean isLikelyPlayerNpc(Player player) {
+        ClientPacketListener connection = mc.getConnection();
+        return SwdClient.CONFIG.includePlayerNpcs
+                && connection != null
+                && player != mc.player
+                && connection.getListedOnlinePlayers().stream()
+                .noneMatch(info -> info.getProfile().id().equals(player.getUUID()));
+    }
+
+    private static Optional<CompoundTag> buildPlayerNpcNbt(Player player) {
+        var connection = mc.getConnection();
+        var playerInfo = connection != null ? connection.getPlayerInfo(player.getUUID()) : null;
+        var profile = playerInfo != null ? playerInfo.getProfile() : player.getGameProfile();
+        Optional<Tag> profileTag = ResolvableProfile.CODEC
+                .encodeStart(ops, ResolvableProfile.createResolved(profile))
+                .result();
+        if (profileTag.isEmpty()) return Optional.empty();
+
+        Mannequin mannequin = Mannequin.create(EntityTypes.MANNEQUIN, player.level());
+        mannequin.snapTo(player.getX(), player.getY(), player.getZ(), player.getYRot(), player.getXRot());
+        mannequin.setYHeadRot(player.getYHeadRot());
+        mannequin.setYBodyRot(player.getYRot());
+        mannequin.setMainArm(player.getMainArm());
+        mannequin.setPose(toMannequinPose(player.getPose()));
+        mannequin.setUUID(UUID.nameUUIDFromBytes(
+                ("swd:player_npc:" + player.getUUID()).getBytes(StandardCharsets.UTF_8)));
+        mannequin.setCustomName(player.getDisplayName());
+        mannequin.setCustomNameVisible(true);
+        mannequin.setInvisible(player.isInvisible());
+        mannequin.setNoGravity(true);
+        mannequin.setInvulnerable(true);
+        mannequin.setSilent(true);
+
+        for (EquipmentSlot slot : PLAYER_NPC_EQUIPMENT_SLOTS) {
+            mannequin.setItemSlot(slot, player.getItemBySlot(slot).copy());
+        }
+
+        CompoundTag entityNbt = saveEntityToNbt(mannequin);
+        entityNbt.put("profile", profileTag.get());
+        entityNbt.putBoolean("immovable", true);
+        return Optional.of(entityNbt);
+    }
+
+    private static Pose toMannequinPose(Pose pose) {
+        return switch (pose) {
+            case CROUCHING, SWIMMING, FALL_FLYING, SLEEPING -> pose;
+            default -> Pose.STANDING;
+        };
     }
 
     /**
@@ -975,6 +1045,7 @@ public class SaveManager {
                     name = "Flashback";
                 else name = mc.getSingleplayerServer().getWorldData().getLevelName().replaceAll("[\\\\/:*?\"<>|]", "_");
             }
+            name = WorldSessionTracker.applySelectedSuffix(name);
             Path saves = Paths.get("saves");
             // Reuse existing SWD world: if a directory with the base name was already
             // saved by this mod, continue writing into it instead of creating a new one.
@@ -989,10 +1060,11 @@ public class SaveManager {
             }
         } else {
             Path saves = Paths.get("saves");
-            if (allowResume && SwdWorldMarker.isMarked(saves.resolve(SwdClient.CONFIG.saveWorldTo))) {
+            String selectedName = WorldSessionTracker.applySelectedSuffix(SwdClient.CONFIG.saveWorldTo);
+            if (allowResume && SwdWorldMarker.isMarked(saves.resolve(selectedName))) {
                 isResumingExistingWorld = true;
             }
-            name = SwdClient.CONFIG.saveWorldTo;
+            name = selectedName;
         }
     }
 
@@ -1263,7 +1335,8 @@ public class SaveManager {
     private static void captureChunkToRegion(Path worldFolder, LevelChunk wc, boolean showMessage, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
         if (wc.isEmpty()) return;
 
-        String dedupKey = packChunkDimKey(wc.getPos(), dimension);
+        String chunkKey = packChunkDimKey(wc.getPos(), dimension);
+        String dedupKey = packWorldChunkKey(worldFolder, wc.getPos(), dimension);
 
         // Dedup: skip if this exact chunk+dimension is already queued
         if (!queuedChunks.add(dedupKey)) {
@@ -1281,7 +1354,16 @@ public class SaveManager {
         CompoundTag blockNbt = buildChunkNbt(wc);
         CompoundTag entityNbt = buildEntityChunkNbt(wc);
 
-        saveQueue.add(new ChunkSaveTask(wc.getPos(), blockNbt, entityNbt, dimension));
+        saveQueue.add(new ChunkSaveTask(
+                worldFolder.toAbsolutePath().normalize(),
+                wc.getPos(),
+                blockNbt,
+                entityNbt,
+                dimension,
+                isResumingExistingWorld,
+                touchedChunks.contains(chunkKey),
+                dedupKey
+        ));
 
         // Detect dimension change: when player enters a new dimension, trigger a batch save.
         // Update lastSavedDimension BEFORE saveChunksAround to prevent re-entrant triggering.
@@ -1293,7 +1375,7 @@ public class SaveManager {
         }
 
         if (saveThread == null || !saveThread.isAlive()) {
-            saveThread = new Thread(() -> processQueue(worldFolder));
+            saveThread = new Thread(SaveManager::processQueue);
             saveThread.start();
         }
 
@@ -1302,9 +1384,9 @@ public class SaveManager {
         }
     }
 
-    private static void processQueue(Path worldFolder) {
-        java.util.Map<net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>, RegionStorage> blockStorages = new java.util.HashMap<>();
-        java.util.Map<net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>, RegionStorage> entityStorages = new java.util.HashMap<>();
+    private static void processQueue() {
+        java.util.Map<StorageKey, RegionStorage> blockStorages = new java.util.HashMap<>();
+        java.util.Map<StorageKey, RegionStorage> entityStorages = new java.util.HashMap<>();
         try {
 
             while (true) {
@@ -1323,29 +1405,28 @@ public class SaveManager {
                 }
 
                 var dimKey = task.dimension != null ? task.dimension : net.minecraft.world.level.Level.OVERWORLD;
+                StorageKey storageKey = new StorageKey(task.worldFolder, dimKey);
 
-                RegionStorage blockStorage = blockStorages.computeIfAbsent(dimKey, dk -> {
-                    String ns = dk.identifier().getNamespace();
-                    String p = dk.identifier().getPath();
-                    Path dir = worldFolder.resolve("dimensions").resolve(ns).resolve(p).resolve("region");
+                RegionStorage blockStorage = blockStorages.computeIfAbsent(storageKey, key -> {
+                    String ns = key.dimension.identifier().getNamespace();
+                    String p = key.dimension.identifier().getPath();
+                    Path dir = key.worldFolder.resolve("dimensions").resolve(ns).resolve(p).resolve("region");
                     checkPathExists(dir);
                     return new RegionStorage(dir);
                 });
-                RegionStorage entityStorage = entityStorages.computeIfAbsent(dimKey, dk -> {
-                    String ns = dk.identifier().getNamespace();
-                    String p = dk.identifier().getPath();
-                    Path dir = worldFolder.resolve("dimensions").resolve(ns).resolve(p).resolve("entities");
+                RegionStorage entityStorage = entityStorages.computeIfAbsent(storageKey, key -> {
+                    String ns = key.dimension.identifier().getNamespace();
+                    String p = key.dimension.identifier().getPath();
+                    Path dir = key.worldFolder.resolve("dimensions").resolve(ns).resolve(p).resolve("entities");
                     checkPathExists(dir);
                     return new RegionStorage(dir);
                 });
 
-                String dedupKey = packChunkDimKey(task.pos, task.dimension);
-                boolean touched = touchedChunks.contains(dedupKey);
                 boolean skipBlockWrite = false;
                 boolean skipEntityWrite = false;
                 CompoundTag oldBlockNbt = null;
 
-                if (isResumingExistingWorld && !touched) {
+                if (task.resumingExistingWorld && !task.touched) {
                     try {
                         oldBlockNbt = blockStorage.read(task.pos, task.dimension);
                         boolean hasRealChunk = oldBlockNbt != null && !isEmptyChunkNbt(oldBlockNbt);
@@ -1357,7 +1438,7 @@ public class SaveManager {
 
                 if (!skipBlockWrite) {
                     CompoundTag finalBlockNbt = task.blockNbt;
-                    if (isResumingExistingWorld && touched && task.blockNbt != null) {
+                    if (task.resumingExistingWorld && task.touched && task.blockNbt != null) {
                         try {
                             CompoundTag mergeSource = oldBlockNbt != null ? oldBlockNbt : blockStorage.read(task.pos, task.dimension);
                             boolean mergeSourceEmpty = mergeSource != null && isEmptyChunkNbt(mergeSource);
@@ -1372,7 +1453,7 @@ public class SaveManager {
 
                 if (!skipEntityWrite) {
                     CompoundTag finalEntityNbt = task.entityNbt;
-                    if (isResumingExistingWorld && touched && task.entityNbt != null) {
+                    if (task.resumingExistingWorld && task.touched && task.entityNbt != null) {
                         try {
                             CompoundTag oldEntityNbt = entityStorage.read(task.pos, task.dimension);
                             if (oldEntityNbt != null) {
@@ -1385,8 +1466,10 @@ public class SaveManager {
                 }
 
                 // Remove from dedup set after successful write/skip
-                queuedChunks.remove(packChunkDimKey(task.pos, task.dimension));
-                ChunkDownloadTracker.markSaved(task.pos, task.dimension);
+                queuedChunks.remove(task.dedupKey);
+                if (isCurrentWorldFolder(task.worldFolder)) {
+                    ChunkDownloadTracker.markSaved(task.pos, task.dimension);
+                }
             }
         } catch (IOException e) {
             SwdClient.LOGGER.error("Failed to process chunk save queue!", e);
@@ -1777,6 +1860,15 @@ public class SaveManager {
         return dimId + "|" + chunkX + "," + chunkZ;
     }
 
+    private static String packWorldChunkKey(Path worldFolder, ChunkPos pos,
+                                            net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dim) {
+        return worldFolder.toAbsolutePath().normalize() + "|" + packChunkDimKey(pos, dim);
+    }
+
+    private static boolean isCurrentWorldFolder(Path worldFolder) {
+        return path != null && worldFolder.equals(path.toAbsolutePath().normalize());
+    }
+
     /**
      * Convert a UUID into the 4-int NBT array format Minecraft expects.
      */
@@ -1786,8 +1878,13 @@ public class SaveManager {
         return new int[]{(int) (most >> 32), (int) most, (int) (least >> 32), (int) least};
     }
 
-    private record ChunkSaveTask(ChunkPos pos, CompoundTag blockNbt, CompoundTag entityNbt,
-                                 net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+    private record ChunkSaveTask(Path worldFolder, ChunkPos pos, CompoundTag blockNbt, CompoundTag entityNbt,
+                                 net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+                                 boolean resumingExistingWorld, boolean touched, String dedupKey) {
+    }
+
+    private record StorageKey(Path worldFolder,
+                              net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
     }
 
     private record ChunkCaptureTask(Path worldFolder, int chunkX, int chunkZ,

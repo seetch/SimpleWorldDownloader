@@ -1,11 +1,14 @@
 package com.j0ker2j0ker.swd.client.mixin;
 
 import com.j0ker2j0ker.swd.client.util.SaveManager;
+import com.j0ker2j0ker.swd.client.util.ChunkDownloadTracker;
+import com.j0ker2j0ker.swd.client.util.WorldSessionTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.network.protocol.game.ClientboundAwardStatsPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundUpdateAdvancementsPacket;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
@@ -19,6 +22,22 @@ public abstract class ClientPacketListenerMixin {
 
     @Shadow
     private ClientLevel level;
+
+    @Inject(method = "handleLogin", at = @At("HEAD"))
+    private void beforeHandleLogin(ClientboundLoginPacket packet, CallbackInfo ci) {
+        ClientPacketListener listener = (ClientPacketListener) (Object) this;
+        if (WorldSessionTracker.isKnownConnection(listener) && SaveManager.isSaving) {
+            SaveManager.stop();
+        }
+    }
+
+    @Inject(method = "handleLogin", at = @At("TAIL"))
+    private void afterHandleLogin(ClientboundLoginPacket packet, CallbackInfo ci) {
+        ClientPacketListener listener = (ClientPacketListener) (Object) this;
+        if (WorldSessionTracker.onLogin(listener, packet)) {
+            ChunkDownloadTracker.reset();
+        }
+    }
 
     @Inject(method = "handleLevelChunkWithLight", at = @At("TAIL"))
     private void handleLevelChunkWithLight(ClientboundLevelChunkWithLightPacket packet, CallbackInfo ci) {

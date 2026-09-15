@@ -54,12 +54,19 @@ import net.minecraft.world.item.trading.MerchantOffers;
 import net.minecraft.world.entity.npc.villager.AbstractVillager;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.npc.villager.VillagerData;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.decoration.Mannequin;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.component.ResolvableProfile;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -80,6 +87,14 @@ public class SaveManager {
     private static final int PLAYER_INVENTORY_SLOTS = 36;
     private static final int DOUBLE_CHEST_SLOTS = 54;
     private static final int SINGLE_CHEST_SLOTS = 27;
+    private static final List<EquipmentSlot> PLAYER_NPC_EQUIPMENT_SLOTS = List.of(
+            EquipmentSlot.MAINHAND,
+            EquipmentSlot.OFFHAND,
+            EquipmentSlot.FEET,
+            EquipmentSlot.LEGS,
+            EquipmentSlot.CHEST,
+            EquipmentSlot.HEAD
+    );
     private static final long META_FLUSH_INTERVAL_MS = 5000L;
     private static final DateTimeFormatter ADVANCEMENT_TIME_FORMAT = DateTimeFormatter
             .ofPattern("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT)
@@ -483,7 +498,12 @@ public class SaveManager {
         );
 
         wc.getLevel().getEntities(null, box).forEach(entity -> {
-            if (entity instanceof net.minecraft.world.entity.player.Player) return;
+            if (entity instanceof Player player) {
+                if (SwdClient.CONFIG.includeEntities && isLikelyPlayerNpc(player)) {
+                    buildPlayerNpcNbt(player).ifPresent(entityList::add);
+                }
+                return;
+            }
 
             CompoundTag entityNbt = saveEntityToNbt(entity);
             injectCachedEntityInventory(entity, entityNbt);
@@ -572,6 +592,56 @@ public class SaveManager {
 
             return output.buildResult();
         }
+    }
+
+    private static boolean isLikelyPlayerNpc(Player player) {
+        ClientPacketListener connection = mc.getConnection();
+        return SwdClient.CONFIG.includePlayerNpcs
+                && connection != null
+                && player != mc.player
+                && connection.getListedOnlinePlayers().stream()
+                .noneMatch(info -> info.getProfile().id().equals(player.getUUID()));
+    }
+
+    private static Optional<CompoundTag> buildPlayerNpcNbt(Player player) {
+        var connection = mc.getConnection();
+        var playerInfo = connection != null ? connection.getPlayerInfo(player.getUUID()) : null;
+        var profile = playerInfo != null ? playerInfo.getProfile() : player.getGameProfile();
+        Optional<Tag> profileTag = ResolvableProfile.CODEC
+                .encodeStart(ops, ResolvableProfile.createResolved(profile))
+                .result();
+        if (profileTag.isEmpty()) return Optional.empty();
+
+        Mannequin mannequin = Mannequin.create(EntityType.MANNEQUIN, player.level());
+        mannequin.snapTo(player.getX(), player.getY(), player.getZ(), player.getYRot(), player.getXRot());
+        mannequin.setYHeadRot(player.getYHeadRot());
+        mannequin.setYBodyRot(player.getYRot());
+        mannequin.setMainArm(player.getMainArm());
+        mannequin.setPose(toMannequinPose(player.getPose()));
+        mannequin.setUUID(UUID.nameUUIDFromBytes(
+                ("swd:player_npc:" + player.getUUID()).getBytes(StandardCharsets.UTF_8)));
+        mannequin.setCustomName(player.getDisplayName());
+        mannequin.setCustomNameVisible(true);
+        mannequin.setInvisible(player.isInvisible());
+        mannequin.setNoGravity(true);
+        mannequin.setInvulnerable(true);
+        mannequin.setSilent(true);
+
+        for (EquipmentSlot slot : PLAYER_NPC_EQUIPMENT_SLOTS) {
+            mannequin.setItemSlot(slot, player.getItemBySlot(slot).copy());
+        }
+
+        CompoundTag entityNbt = saveEntityToNbt(mannequin);
+        entityNbt.put("profile", profileTag.get());
+        entityNbt.putBoolean("immovable", true);
+        return Optional.of(entityNbt);
+    }
+
+    private static Pose toMannequinPose(Pose pose) {
+        return switch (pose) {
+            case CROUCHING, SWIMMING, FALL_FLYING, SLEEPING -> pose;
+            default -> Pose.STANDING;
+        };
     }
 
     private static void injectCachedBlockInventory(BlockPos pos, CompoundTag beTag) {
@@ -688,14 +758,17 @@ public class SaveManager {
                 else if(mc.getSingleplayerServer().getWorldData().getLevelName().equalsIgnoreCase("Replay")) name = "Flashback";
                 else name = mc.getSingleplayerServer().getWorldData().getLevelName().replaceAll("[\\\\/:*?\"<>|]", "_");
             }
+            name = WorldSessionTracker.applySelectedSuffix(name);
             Path saves = Paths.get("saves");
-            if(Files.exists(saves.resolve(name))) {
+            boolean resumeMarkedWorld = SwdClient.CONFIG.resumeDownloads
+                    && SwdWorldMarker.isMarked(saves.resolve(name));
+            if(Files.exists(saves.resolve(name)) && !resumeMarkedWorld) {
                 int i = 1;
                 while(Files.exists(saves.resolve(name + " " + i))) i++;
                 name += " " + i;
             }
         }else {
-            name = SwdClient.CONFIG.saveWorldTo;
+            name = WorldSessionTracker.applySelectedSuffix(SwdClient.CONFIG.saveWorldTo);
         }
     }
 
@@ -952,26 +1025,27 @@ public class SaveManager {
         CompoundTag blockNbt = buildChunkNbt(wc);
         CompoundTag entityNbt = buildEntityChunkNbt(wc);
 
-        saveQueue.add(new ChunkSaveTask(wc.getPos(), blockNbt, entityNbt));
+        saveQueue.add(new ChunkSaveTask(
+                worldFolder.toAbsolutePath().normalize(),
+                wc.getPos(),
+                blockNbt,
+                entityNbt,
+                dimension
+        ));
         ChunkDownloadTracker.markQueued(wc.getPos(), dimension);
 
         if (saveThread == null || !saveThread.isAlive()) {
-            Path dimensionRoot = getLegacyDimensionRoot(worldFolder, dimension);
-            Path regionDir = dimensionRoot.resolve("region");
-            Path entityDir = dimensionRoot.resolve("entities");
-            checkPathExists(regionDir);
-            checkPathExists(entityDir);
-            saveThread = new Thread(() -> processQueue(regionDir, entityDir, dimension));
+            saveThread = new Thread(SaveManager::processQueue);
             saveThread.start();
         }
 
         if (showMessage) printStatus("§a> Saving chunk " + wc.getPos());
     }
 
-    private static void processQueue(Path regionDir, Path entityDir, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
-        try (RegionStorage blockStorage = new RegionStorage(regionDir);
-             RegionStorage entityStorage = new RegionStorage(entityDir)) {
-
+    private static void processQueue() {
+        Map<StorageKey, RegionStorage> blockStorages = new HashMap<>();
+        Map<StorageKey, RegionStorage> entityStorages = new HashMap<>();
+        try {
             while (true) {
                 ChunkSaveTask task = saveQueue.poll();
                 if (task == null) {
@@ -987,12 +1061,30 @@ public class SaveManager {
                     continue;
                 }
 
+                var dimension = task.dimension != null ? task.dimension : net.minecraft.world.level.Level.OVERWORLD;
+                StorageKey storageKey = new StorageKey(task.worldFolder, dimension);
+                RegionStorage blockStorage = blockStorages.computeIfAbsent(storageKey, key -> {
+                    Path regionDir = getLegacyDimensionRoot(key.worldFolder, key.dimension).resolve("region");
+                    checkPathExists(regionDir);
+                    return new RegionStorage(regionDir);
+                });
+                RegionStorage entityStorage = entityStorages.computeIfAbsent(storageKey, key -> {
+                    Path entityDir = getLegacyDimensionRoot(key.worldFolder, key.dimension).resolve("entities");
+                    checkPathExists(entityDir);
+                    return new RegionStorage(entityDir);
+                });
+
                 blockStorage.write(task.pos, task.blockNbt, dimension);
                 entityStorage.write(task.pos, task.entityNbt, dimension);
-                ChunkDownloadTracker.markSaved(task.pos, dimension);
+                if (isCurrentWorldFolder(task.worldFolder)) {
+                    ChunkDownloadTracker.markSaved(task.pos, dimension);
+                }
             }
         } catch (IOException e) {
             SwdClient.LOGGER.error("Failed to process chunk save queue!", e);
+        } finally {
+            blockStorages.values().forEach(RegionStorage::close);
+            entityStorages.values().forEach(RegionStorage::close);
         }
     }
 
@@ -1388,7 +1480,15 @@ public class SaveManager {
         return dimensionId + "|" + chunkX + "," + chunkZ;
     }
 
-    private record ChunkSaveTask(ChunkPos pos, CompoundTag blockNbt, CompoundTag entityNbt) { }
+    private static boolean isCurrentWorldFolder(Path worldFolder) {
+        return path != null && worldFolder.equals(path.toAbsolutePath().normalize());
+    }
+
+    private record ChunkSaveTask(Path worldFolder, ChunkPos pos, CompoundTag blockNbt, CompoundTag entityNbt,
+                                 net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) { }
+
+    private record StorageKey(Path worldFolder,
+                              net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) { }
 
     private record ChunkCaptureTask(Path worldFolder, int chunkX, int chunkZ,
                                     net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,

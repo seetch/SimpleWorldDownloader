@@ -2,6 +2,7 @@ package com.j0ker2j0ker.swd.client.screen;
 
 import com.j0ker2j0ker.swd.client.util.ChunkDownloadTracker;
 import com.j0ker2j0ker.swd.client.util.SaveManager;
+import com.j0ker2j0ker.swd.client.util.WorldSessionTracker;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -49,6 +50,7 @@ public class ChunkMapScreen extends Screen {
     private double dragAccumulatorX;
     private double dragAccumulatorY;
     private Button downloadButton;
+    private Button worldButton;
 
     public ChunkMapScreen(Screen parent) {
         super(Component.translatable("swd.screen.chunk_map.title"));
@@ -73,7 +75,14 @@ public class ChunkMapScreen extends Screen {
         this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
                 .pos(buttonX + (buttonWidth + 5) * 2, this.height - 27).width(buttonWidth).build());
 
+        this.worldButton = this.addRenderableWidget(Button.builder(Component.empty(), button -> cycleWorldTarget())
+                .pos(mapLeft, 24).width(150).build());
+        this.addRenderableWidget(Button.builder(Component.translatable("swd.button.settings"), button ->
+                        this.minecraft.setScreen(new SwdConfigScreen(this)))
+                .pos(mapRight - 100, 24).width(100).build());
+
         updateDownloadButton();
+        updateWorldButton();
         refreshSnapshot();
     }
 
@@ -81,6 +90,7 @@ public class ChunkMapScreen extends Screen {
     public void tick() {
         super.tick();
         updateDownloadButton();
+        updateWorldButton();
         snapshotTicks++;
         if ((snapshotDirty && snapshotTicks >= 2) || snapshotTicks >= SNAPSHOT_INTERVAL_TICKS) {
             refreshSnapshot();
@@ -105,8 +115,8 @@ public class ChunkMapScreen extends Screen {
                 ? Component.translatable("swd.screen.chunk_map.active")
                 : Component.translatable("swd.screen.chunk_map.inactive");
         graphics.drawString(this.font, Component.translatable("swd.screen.chunk_map.dimension", dimension),
-                mapLeft, 30, 0xFFB9C2CC);
-        graphics.drawString(this.font, activity, mapRight - this.font.width(activity), 30,
+                mapLeft, 50, 0xFFB9C2CC);
+        graphics.drawString(this.font, activity, mapRight - this.font.width(activity), 50,
                 SaveManager.isSaving ? SAVED_COLOR : 0xFF9AA3AC);
 
         graphics.fill(mapLeft - 2, mapTop - 2, mapRight + 2, mapBottom + 2, PANEL_COLOR);
@@ -259,7 +269,7 @@ public class ChunkMapScreen extends Screen {
 
     private void updateMapBounds() {
         this.mapLeft = 18;
-        this.mapTop = 48;
+        this.mapTop = 68;
         this.mapRight = Math.max(mapLeft + 1, this.width - 18);
         this.mapBottom = Math.max(mapTop + 1, this.height - 58);
     }
@@ -285,6 +295,25 @@ public class ChunkMapScreen extends Screen {
                 ? "swd.button.stop_download"
                 : "swd.button.start_download"));
         downloadButton.active = this.minecraft != null && this.minecraft.level != null && this.minecraft.player != null;
+    }
+
+    private void cycleWorldTarget() {
+        if (!WorldSessionTracker.selectNext()) return;
+        if (SaveManager.isSaving) {
+            SaveManager.stop();
+        }
+        ChunkDownloadTracker.reset();
+        updateWorldButton();
+        snapshotDirty = true;
+    }
+
+    private void updateWorldButton() {
+        if (worldButton == null) return;
+        String translationKey = WorldSessionTracker.isSelectedCurrent()
+                ? "swd.button.world_target.current"
+                : "swd.button.world_target";
+        worldButton.setMessage(Component.translatable(translationKey, WorldSessionTracker.getSelectedNumber()));
+        worldButton.active = WorldSessionTracker.getTargetCount() > 1;
     }
 
     private boolean isOverMap(double mouseX, double mouseY) {

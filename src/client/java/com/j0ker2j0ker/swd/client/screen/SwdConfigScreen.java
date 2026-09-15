@@ -52,6 +52,11 @@ public class SwdConfigScreen extends Screen {
             Component.translatable("swd.tooltip.include_entities.2")
     );
 
+    private static final List<Component> PLAYER_NPCS_DESC = List.of(
+            Component.translatable("swd.tooltip.include_player_npcs.1"),
+            Component.translatable("swd.tooltip.include_player_npcs.2")
+    );
+
     private static final List<Component> PLAYER_DATA_DESC = List.of(
             Component.translatable("swd.tooltip.include_player_data.1"),
             Component.translatable("swd.tooltip.include_player_data.2")
@@ -85,10 +90,12 @@ public class SwdConfigScreen extends Screen {
         this.includesHeaderY = 165;
         int entitiesLabelX = centerX - 180;
         int entitiesLabelY = 190;
+        int playerNpcsLabelX = centerX - 180;
+        int playerNpcsLabelY = 210;
         int playerDataLabelX = centerX - 180;
-        int playerDataLabelY = 210;
+        int playerDataLabelY = 230;
         int resourcePacksLabelX = centerX - 180;
-        int resourcePacksLabelY = 230;
+        int resourcePacksLabelY = 250;
 
         // move inputs right + smaller text box
         int nameFieldX = centerX - 20;
@@ -108,10 +115,12 @@ public class SwdConfigScreen extends Screen {
         int notificationButtonW = 150;
         int entitiesCheckboxX = centerX - 20;
         int entitiesCheckboxY = 185;
+        int playerNpcsCheckboxX = centerX - 20;
+        int playerNpcsCheckboxY = 205;
         int playerDataCheckboxX = centerX - 20;
-        int playerDataCheckboxY = 205;
+        int playerDataCheckboxY = 225;
         int resourcePacksCheckboxX = centerX - 20;
-        int resourcePacksCheckboxY = 225;
+        int resourcePacksCheckboxY = 245;
 
         // dynamic settings list
         this.settings.add(new StringSettingEntry(
@@ -172,6 +181,17 @@ public class SwdConfigScreen extends Screen {
                 entitiesCheckboxY,
                 () -> SwdClient.CONFIG.includeEntities,
                 value -> SwdClient.CONFIG.includeEntities = value
+        ));
+
+        this.settings.add(new BooleanSettingEntry(
+                Component.translatable("swd.screen.config.label.include_player_npcs"),
+                PLAYER_NPCS_DESC,
+                playerNpcsLabelX,
+                playerNpcsLabelY,
+                playerNpcsCheckboxX,
+                playerNpcsCheckboxY,
+                () -> SwdClient.CONFIG.includePlayerNpcs,
+                value -> SwdClient.CONFIG.includePlayerNpcs = value
         ));
 
         this.settings.add(new BooleanSettingEntry(
